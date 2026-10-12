@@ -4,7 +4,7 @@
 
 ## 接入条件与来源
 
-官方开放平台覆盖本项目所需的扫码登录、用户歌单、分页搜索、歌曲列表和播放地址。使用前需入驻、创建应用、上传 RSA 公钥，并保留对应私钥。官方 CLI 也要求配置 `appId` 和 `privateKey`。[官方说明](https://github.com/NetEase/skills#前置条件)、[开发者入驻](https://developer.music.163.com/st/developer/apply/account?type=INDIVIDUAL)
+官方开放平台覆盖本项目所需的扫码登录、用户歌单、分页搜索、歌曲列表和播放地址。个人开发者入驻后需初始化应用，从应用详情取得 `appId` 和 `privateKey`。具体操作见[配置指南](netease-setup.md)。官方 CLI 也要求配置 `appId` 和 `privateKey`。[官方说明](https://github.com/NetEase/skills#前置条件)、[开发者入驻](https://developer.music.163.com/st/developer/apply/account?type=INDIVIDUAL)
 
 本次以开放平台公开文档为协议依据。文档目录接口 `GET https://developer.music.163.com/api/openplatform/developer/api/doc/category` 返回目录及正文；单篇接口为 `GET /api/openplatform/developer/apidoc/get?docId=<id>`。
 

@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import os
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -20,6 +21,7 @@ from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView,
 from .models import LoginState, Playlist, Quality, SongPage, Track
 from .player import Player
 from .sources import MusicSource
+from .sources.netease_openapi import OfficialAPIError
 from .sources.qqmusic import QQMusic
 
 
@@ -32,7 +34,7 @@ def timestamp(seconds: float | None) -> str:
 def error_text(error: Exception) -> str:
     # Network exceptions may contain authenticated URLs; keep those out of the UI.
     """Return a user-facing error without exposing authenticated network URLs."""
-    if type(error) in (ValueError, RuntimeError):
+    if type(error) in (ValueError, RuntimeError) or isinstance(error, OfficialAPIError):
         return str(error)
     if isinstance(error, TimeoutError):
         return "请求超时，请重试"
@@ -164,6 +166,59 @@ class QualityScreen(ModalScreen[Quality | None]):
         self.dismiss(None)
 
 
+class PlatformScreen(ModalScreen[str | None]):
+    """Select a music platform without leaving the running application."""
+
+    BINDINGS = [Binding("escape", "cancel", "返回")]
+    OPTIONS = [
+        ("qq", "QQ 音乐"),
+        ("netease-official", "网易云音乐 · 官方 API（优先）"),
+        ("netease-enhanced", "网易云音乐 · Enhanced"),
+    ]
+    DEFAULT_CSS = """
+    PlatformScreen { align: center middle; background: $background 95%; }
+    #platform-box { width: 64; max-width: 100%; height: auto; border: solid #58d6a0; padding: 1 2; }
+    #platform-options { height: 9; margin: 1 0; }
+    #platform-help { height: auto; color: $text-muted; }
+    """
+
+    def __init__(self, selected: str):
+        """Highlight the active platform and explain switching behavior."""
+        super().__init__()
+        self.selected = selected
+
+    def compose(self) -> ComposeResult:
+        """Show the official service first among NetEase choices."""
+        with Vertical(id="platform-box"):
+            yield Static("切换音乐平台")
+            yield ListView(
+                *(ListItem(Label(label, markup=False)) for _, label in self.OPTIONS),
+                initial_index=[key for key, _ in self.OPTIONS].index(self.selected),
+                id="platform-options",
+            )
+            yield Static(
+                "官方：需应用凭证和设备配置。\n"
+                "Enhanced：需本地 API 服务。\n"
+                "切换后停止播放并清空队列，保留各平台登录凭证。\n"
+                "↑/↓ 选择 · Enter 确认 · Esc 返回",
+                id="platform-help",
+            )
+
+    def on_mount(self) -> None:
+        """Focus the platform choices for keyboard navigation."""
+        self.query_one(ListView).focus()
+
+    @on(ListView.Selected, "#platform-options")
+    def select_platform(self, event: ListView.Selected) -> None:
+        """Return the selected source key to the application."""
+        if event.list_view.index is not None:
+            self.dismiss(self.OPTIONS[event.list_view.index][0])
+
+    def action_cancel(self) -> None:
+        """Close the selector while retaining playback and account state."""
+        self.dismiss(None)
+
+
 @dataclass(frozen=True)
 class PlaylistSearch:
     playlist: Playlist
@@ -228,6 +283,7 @@ class MusicApp(App):
     Footer { background: $base; }
     """
     BINDINGS = [
+        Binding("f2", "platform", "切换平台", priority=True),
         Binding("p", "previous", "上一首"),
         Binding("n", "next", "下一首"),
         Binding("space", "pause", "暂停"),
@@ -246,11 +302,27 @@ class MusicApp(App):
         Binding("escape", "songs", "歌曲", show=False),
     ]
 
-    def __init__(self, music: MusicSource, player: Player):
+    def __init__(
+        self,
+        music: MusicSource,
+        player: Player,
+        *,
+        source_factory: Callable[[str], MusicSource] | None = None,
+        source_key: str = "qq",
+    ):
         """Initialize library, browsing, playback, and shuffle state."""
         super().__init__()
         self.music = music
         self.player = player
+        self.source_factory = source_factory
+        self.source_key = source_key
+        self.switching = False
+        self.reset_library()
+        self.ready = False
+        self.table_width = 0
+
+    def reset_library(self) -> None:
+        """Clear platform-specific account, browsing, queue and quality state."""
         self.playlists: list[Playlist] = []
         self.tracks: list[Track] = []
         self.source: str | Playlist | PlaylistSearch | None = None
@@ -267,8 +339,6 @@ class MusicApp(App):
         self.index = -1
         self.current: Track | None = None
         self.loading = False
-        self.ready = False
-        self.table_width = 0
         self.now_playing_text = "尚未播放"
         self.quality = Quality.STANDARD
         self.current_quality: Quality | None = None
@@ -301,9 +371,7 @@ class MusicApp(App):
         with Vertical(id="player-box"):
             yield Static("尚未播放", id="now-playing", markup=False)
             yield Static("选中歌曲后按 Enter 播放", id="playback-detail", markup=False)
-        yield Static(
-            "L 扫码登录 · / 搜索 · Tab 切换区域 · ←/→ 快进退 · −/+ 音量", id="status", markup=False
-        )
+        yield Static("F2 切换平台 · L 扫码登录 · / 搜索 · Tab 切换区域", id="status", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -362,6 +430,70 @@ class MusicApp(App):
         except Exception as error:
             self.status(error_text(error))
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Keep application controls idle while platform ownership changes."""
+        return not self.switching or action == "quit"
+
+    def action_platform(self) -> None:
+        """Open the platform menu from browsing or a focused search field."""
+        if self.switching or isinstance(self.screen, ModalScreen):
+            return
+        self.workers.cancel_group(self, "qualities")
+        self.push_screen(PlatformScreen(self.source_key), self.choose_platform)
+
+    def choose_platform(self, key: str | None) -> None:
+        """Start a switch only when the user chooses a different platform."""
+        if key is not None and key != self.source_key and not self.switching:
+            self.switch_platform(key)
+
+    @work(group="platform", exclusive=True)
+    async def switch_platform(self, key: str) -> None:
+        """Validate the new account, drain old work, and transfer source ownership."""
+        if key == self.source_key or self.source_factory is None or self.switching:
+            return
+        self.switching = True
+        candidate = None
+        previous = None
+        try:
+            candidate = self.source_factory(key)
+            self.status(f"正在切换到 {candidate.display_name}…")
+            async with asyncio.timeout(25):
+                logged_in = await candidate.restore()
+            pending = []
+            for group in ("restore", "library", "view", "play", "qualities", "control"):
+                pending.extend(self.workers.cancel_group(self, group))
+            await asyncio.gather(*(worker.wait() for worker in pending), return_exceptions=True)
+            if self.ready:
+                await self.player.command("stop")
+            previous = self.music
+            self.music, candidate = candidate, None
+            self.source_key = key
+            self.reset_library()
+            self.account_logged_in = logged_in
+            self.query_one("#search", Input).value = ""
+            field = self.query_one("#filter", Input)
+            field.value = ""
+            field.display = False
+            await self.query_one("#playlists", ListView).clear()
+            self.query_one("#songs", DataTable).clear()
+            self.query_one("#view-title", Static).update("选择歌单，或搜索一首歌")
+            self.query_one("#view-meta", Static).update("Enter 播放   [ / ] 翻页")
+            self.update_heading()
+            self.status(f"已切换到 {self.music.display_name} · L 登录 · / 搜索 · F2 切换平台")
+            if logged_in:
+                self.load_playlists()
+        except Exception as error:
+            message = error_text(error)
+            self.status(message)
+            self.notify(message, title="平台切换", severity="error", timeout=12)
+        finally:
+            if previous is not None:
+                await previous.close()
+            if candidate is not None:
+                await candidate.close()
+            self.switching = False
+            self.update_player()
+
     def action_login(self) -> None:
         """Open QR login after cancelling concurrent credential restoration."""
         if isinstance(self.screen, ModalScreen):
@@ -401,6 +533,8 @@ class MusicApp(App):
     @on(ListView.Selected, "#playlists")
     def select_playlist(self, event: ListView.Selected) -> None:
         """Open the playlist selected in the library sidebar."""
+        if self.switching:
+            return
         index = event.list_view.index
         if index is not None and index < len(self.playlists):
             self.load_view(self.playlists[index])
@@ -408,6 +542,8 @@ class MusicApp(App):
     @on(Input.Submitted, "#search")
     def search_submitted(self, event: Input.Submitted) -> None:
         """Open global search results for a nonempty submitted query."""
+        if self.switching:
+            return
         if keyword := event.value.strip():
             self.load_view(keyword)
 
@@ -475,6 +611,8 @@ class MusicApp(App):
     @on(Input.Submitted, "#filter")
     def filter_submitted(self, event: Input.Submitted) -> None:
         """Search the open playlist or restore its full list for an empty query."""
+        if self.switching:
+            return
         source = self.source
         playlist = source.playlist if isinstance(source, PlaylistSearch) else source
         if isinstance(playlist, Playlist):
@@ -549,6 +687,8 @@ class MusicApp(App):
     @on(DataTable.RowSelected, "#songs")
     def select_track(self, event: DataTable.RowSelected) -> None:
         """Snapshot the displayed page as the queue and play the selected row."""
+        if self.switching:
+            return
         if not self.ready:
             self.status("播放器尚未就绪")
             return
@@ -624,7 +764,7 @@ class MusicApp(App):
 
     def update_player(self) -> None:
         """Consume mpv events, advance completed tracks, and refresh playback details."""
-        if not self.is_running:
+        if not self.is_running or self.switching:
             return
         while not self.player.events.empty():
             event = self.player.events.get_nowait()
@@ -683,7 +823,7 @@ class MusicApp(App):
         for index, track in enumerate(self.tracks):
             table.update_cell(str(index), "position", self.track_number(index, track))
 
-    @work
+    @work(group="control")
     async def control(self, *arguments) -> None:
         """Send a player command and report any failure in the status line."""
         try:
@@ -860,30 +1000,35 @@ async def run(
 ) -> None:
     """Run the selected music source with mpv and close both resources on exit."""
     data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
-    music: MusicSource
-    if source == "netease" and netease_backend == "official":
-        from .sources.netease_official import OfficialNetEaseMusic
 
-        private_key_file = os.environ.get("NETEASE_PRIVATE_KEY_FILE")
-        device_file = os.environ.get("NETEASE_DEVICE_FILE")
-        music = OfficialNetEaseMusic(
-            data_home / "music-tui" / "netease-official",
-            app_id=os.environ.get("NETEASE_APP_ID", ""),
-            private_key_path=Path(private_key_file) if private_key_file else None,
-            device_file=Path(device_file) if device_file else None,
-        )
-    elif source == "netease":
-        from .sources.netease import NetEaseMusic
+    def create_source(key: str) -> MusicSource:
+        """Construct only the chosen platform with its own credential directory."""
+        if key == "netease-official":
+            from .sources.netease_official import OfficialNetEaseMusic
 
-        music = NetEaseMusic(data_home / "music-tui" / "netease", api_url=netease_api_url)
-    else:
-        music = QQMusic(data_home / "qqmusic-tui")
+            private_key_file = os.environ.get("NETEASE_PRIVATE_KEY_FILE")
+            device_file = os.environ.get("NETEASE_DEVICE_FILE")
+            return OfficialNetEaseMusic(
+                data_home / "music-tui" / "netease-official",
+                app_id=os.environ.get("NETEASE_APP_ID", ""),
+                private_key_path=Path(private_key_file) if private_key_file else None,
+                device_file=Path(device_file) if device_file else None,
+            )
+        if key == "netease-enhanced":
+            from .sources.netease import NetEaseMusic
+
+            return NetEaseMusic(data_home / "music-tui" / "netease", api_url=netease_api_url)
+        return QQMusic(data_home / "qqmusic-tui")
+
+    key = f"netease-{netease_backend}" if source == "netease" else "qq"
+    music = create_source(key)
     player = Player()
+    application = MusicApp(music, player, source_factory=create_source, source_key=key)
     try:
-        await MusicApp(music, player).run_async()
+        await application.run_async()
     finally:
         await player.close()
-        await music.close()
+        await application.music.close()
 
 
 def main() -> None:

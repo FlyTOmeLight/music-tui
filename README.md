@@ -6,12 +6,14 @@
 music-tui
 ```
 
-默认使用 QQ 音乐。首次使用按 `l`，用当前平台的手机 App 扫码并确认。二维码直接显示在终端内。
+默认使用 QQ 音乐。在界面内按 `F2`，选择 QQ 音乐、网易云官方或网易云 Enhanced，无需退出。
+首次使用按 `l`，用当前平台的手机 App 扫码并确认。二维码直接显示在终端内。
 登录页适配常见的 80 列 × 24 行终端。登录成功后读取当前账号的歌单。QQ 音乐包含「我喜欢」、自建及收藏歌单。
 登录凭证保存在本机，后续启动会检查登录状态。网易云官方令牌过期后需重新扫码。
 
 | 按键 | 操作 |
 | --- | --- |
+| `F2` | 打开平台菜单，切换 QQ / 网易云及其接入方式 |
 | `l` | 扫码登录 |
 | `/` | 聚焦全站搜索框，输入后回车搜索 |
 | `f` | 聚焦歌单内搜索框，输入歌名或歌手后回车筛选 |
@@ -53,7 +55,7 @@ QQ 音乐候选档位为臻品母带、臻品全景声、臻品音质、Hi-Res �
 歌曲音源、账号及会员权限决定所选音质是否可用。不可用时显示错误，不自动降低音质；
 若无法取得所选音质的播放地址，当前歌曲继续以原音质播放。
 
-界面预览（示例歌曲）：[80×24 终端](docs/tui-preview.png)。
+界面预览（示例歌曲）：[80×24 终端](docs/tui-preview.png) · [平台切换菜单](docs/platform-switch.svg)。
 
 ## 从源码运行
 
@@ -82,22 +84,24 @@ QQ 音乐账号数据继续位于 `~/.local/share/qqmusic-tui/`，也支持 `XDG
 
 ## 网易云音乐
 
-网易云默认使用官方开放平台，直接通过 HTTPS 访问，无需运行本地 API 服务。
-先在[官方开放平台](https://developer.music.163.com/st/developer/apply/account?type=INDIVIDUAL)入驻并创建应用，
-上传 RSA 公钥，并保留应用 ID 和对应私钥。
+按 `F2` 可在应用内切换平台。网易云优先使用官方开放平台；Enhanced 是需自行启动本地服务的第二选择。
+
+**官方接入需要先申请开发者身份。只有网易云听歌账号还不够。**
+个人入驻通过后，在开放平台的应用管理中初始化应用，取得 `appId` 和 `privateKey`。
+当前原生接入还要求设备参数，其中部分值需向网易云确认，不能随意填写。
+从申请入口、保存私钥、填写设备文件到启动验证，请按[网易云配置指南](docs/netease-setup.md)逐步操作。
+
+准备好配置后，在启动 Music TUI 的同一终端设置：
 
 ```sh
-export NETEASE_APP_ID="你的应用 ID"
-export NETEASE_PRIVATE_KEY_FILE="/绝对路径/private-key.pem"
-export NETEASE_DEVICE_FILE="/绝对路径/device.json"
-uv run music-tui --source netease
+export NETEASE_APP_ID="替换为应用详情中的 appId"
+export NETEASE_PRIVATE_KEY_FILE="$HOME/.config/music-tui/netease-private-key.pem"
+export NETEASE_DEVICE_FILE="$HOME/.config/music-tui/netease-device.json"
+uv run music-tui
 ```
 
-设备 JSON 必须按应用接入资料填写 `channel`、`deviceId`、`deviceType`、`appVer`、`os`、
-`osVer`、`brand`、`model`、`clientIp`、`netStatus`。字段要求见[官方 API 接入依据](docs/netease-official-api.md#请求签名与设备信息)。
-设备 ID 应保持稳定。私钥、设备文件和登录凭证不应提交到仓库。
-按 `l` 用网易云音乐 App 扫码确认。官方后端支持个人歌单、搜索、分页和播放音质选择，
-具体接口和音源范围取决于应用与账号权限。当前不自动刷新官方令牌，过期后重新扫码。
+进入界面后按 `F2` 选择网易云官方，再按 `l` 扫码。也可用 `--source netease` 直接启动官方网易云。
+官方请求直接访问网易云，无需运行本地 API 服务。令牌过期后需重新扫码。
 
 没有官方应用凭证时，可显式选择
 [NeteaseCloudMusicApiEnhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced)。
@@ -108,7 +112,7 @@ HOST=127.0.0.1 PORT=3000 ENABLE_GENERAL_UNBLOCK=false ENABLE_PROXY=false \
   npx --yes @neteasecloudmusicapienhanced/api@4.41.1
 ```
 
-保持该终端运行，再在项目目录的另一个终端启动：
+保持该终端运行。在 Music TUI 内按 `F2` 选择网易云 Enhanced 即可。也可直接启动到该方式：
 
 ```sh
 uv run music-tui --source netease --netease-backend enhanced
@@ -122,7 +126,8 @@ Enhanced 服务地址默认为 `http://127.0.0.1:3000`，可用 `--netease-api-u
 切换音质会保留进度和暂停状态。官方凭证保存在 `~/.local/share/music-tui/netease-official/`；
 Enhanced 凭证仍保存在 `~/.local/share/music-tui/netease/netease-credential.json`。
 凭证文件权限为 `0600`，支持 `XDG_DATA_HOME`，两后端与 QQ 凭证互不覆盖。
-切换平台或后端需退出后重新运行对应命令。
+平台切换会停止当前播放并清空当前队列，随后恢复目标平台的登录状态和歌单。
+环境变量在启动时读取；首次补充或修改官方配置后需重新启动 Music TUI。
 
 官方接入已按公开文档实现并通过离线测试；真实登录和会员播放仍需获批应用凭证验证。
 实现选择及接口来源见[网易云接入说明](docs/netease-integration.md)。

@@ -79,8 +79,9 @@ async def test_run_uses_platform_directory_and_closes_resources(
             closed.append("player")
 
     class Interface:
-        def __init__(self, music, player):
+        def __init__(self, music, player, **configuration):
             """Accept the runtime dependencies used by the interface."""
+            self.music = music
             assert isinstance(music, Music)
             assert isinstance(player, Player)
 
