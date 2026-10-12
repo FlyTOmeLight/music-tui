@@ -2,6 +2,7 @@
 
 from bisect import bisect_right
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from rich.text import Text
 from textual import on
@@ -59,7 +60,10 @@ class HelpScreen(ModalScreen[None]):
                     "队列与会话\n"
                     "F3  查看待播队列    A  将选中歌曲插入下一首\n"
                     "队列内 Delete  删除选中的手动待播歌曲\n"
+                    "Ctrl+↑/↓  调整待播顺序    Ctrl+Delete  清空手动待播\n"
                     "F5  重试当前失败歌曲    F6  继续上次播放\n"
+                    "F7  打开／关闭独立播放页\n"
+                    "F8  最近播放；Tab 切换歌曲／来源，O 打开来源\n"
                     "G  返回当前播放来源并定位歌曲\n\n"
                     "歌词与歌单\n"
                     "F4  查看当前歌曲的歌词\n"
@@ -80,74 +84,134 @@ class HelpScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
-class QueueScreen(ModalScreen[int | None]):
-    """Show manual next tracks and the remaining original playback source."""
+@dataclass(frozen=True)
+class QueueItem:
+    """A manual queue entry carrying the application's opaque identity token."""
+
+    key: object
+    track: Track
+
+
+@dataclass(frozen=True)
+class QueueState:
+    """A live snapshot of the current track and both kinds of queued tracks."""
+
+    current: Track | None
+    pending: tuple[QueueItem, ...]
+    upcoming: tuple[Track, ...]
+    has_more: bool
+    source_label: str
+
+
+class QueueScreen(ModalScreen[None]):
+    """Edit manual next tracks while following changes to live playback."""
 
     BINDINGS = [
         Binding("escape,f3", "cancel", "返回", priority=True),
-        Binding("delete,backspace", "remove", "删除待播"),
+        Binding("space", "app.pause", "暂停", priority=True),
+        Binding("n", "app.next", "下一首", priority=True),
+        Binding("p", "app.previous", "上一首", priority=True),
+        Binding("delete,backspace", "edit('remove')", "删除待播"),
+        Binding("ctrl+up", "edit('up')", "上移", priority=True),
+        Binding("ctrl+down", "edit('down')", "下移", priority=True),
+        Binding("ctrl+delete", "edit('clear')", "清空待播", priority=True),
     ]
     SCOPED_CSS = False
     DEFAULT_CSS = DIALOG_CSS
 
     def __init__(
         self,
-        current: Track | None,
-        pending: list[Track],
-        upcoming: list[Track],
-        has_more: bool,
-        source_label: str,
+        get_state: Callable[[], QueueState],
+        edit: Callable[[str, object | None], None],
     ):
-        """Take a queue snapshot; deletion returns the selected manual item's index."""
+        """Read shared queue state and delegate changes using stable entry identities."""
         super().__init__()
-        self.current = current
-        self.pending = list(pending)
-        self.upcoming = list(upcoming)
-        self.has_more = has_more
-        self.source_label = source_label
+        self.get_state = get_state
+        self.edit = edit
+        self._signature: tuple | None = None
+        self._row_keys: list[object | None] = []
 
     def compose(self) -> ComposeResult:
-        """Separate the playing track from manual and original-source queue rows."""
+        """Keep editing instructions visible while the live queue table scrolls."""
         self.add_class("feature-dialog")
         with Vertical(classes="dialog-box"):
             yield Static("待播队列", classes="dialog-title")
-            current = (
-                f"正在播放：{self.current.title} · {self.current.artist}"
-                if self.current
-                else "当前没有播放歌曲"
-            )
-            yield Static(current, markup=False, classes="dialog-subtitle")
-            yield Static(
-                f"播放来源：{self.source_label or '尚未选择'}\n"
-                "手动待播优先播放，听完后继续原列表。",
-                markup=False,
-                classes="dialog-subtitle",
-            )
+            yield Static("", id="queue-current", markup=False, classes="dialog-subtitle")
+            yield Static("", id="queue-source", markup=False, classes="dialog-subtitle")
             yield DataTable(id="queue-items", classes="dialog-body", cursor_type="row")
-            if not self.pending and not self.upcoming:
-                yield Static("暂无待播歌曲，返回列表按 A 添加。", markup=False)
-            if self.has_more:
-                yield Static("原列表还有后续页面，播放时会继续加载。", markup=False)
-            yield Static("↑/↓ 选择 · Delete 删除手动待播 · F3/Esc 返回", classes="dialog-keys")
+            yield Static("", id="queue-notice", markup=False, classes="dialog-subtitle")
+            yield Static(
+                "↑/↓ 选择 · Delete 删除 · Ctrl+↑/↓ 调序\n" "Ctrl+Delete 清空手动待播 · F3/Esc 返回",
+                classes="dialog-keys",
+            )
 
     def on_mount(self) -> None:
-        """Fill the queue table without interpreting song metadata as markup."""
+        """Start refreshing live rows without recreating the focused table."""
         table = self.query_one("#queue-items", DataTable)
         table.add_columns("顺序", "歌曲", "歌手")
-        for index, track in enumerate(self.pending):
-            table.add_row(f"待播 {index + 1}", Text(track.title), Text(track.artist))
-        for index, track in enumerate(self.upcoming):
-            table.add_row(f"随后 {index + 1}", Text(track.title), Text(track.artist))
+        self.refresh_queue()
         table.focus()
+        self.set_interval(0.25, self.refresh_queue)
 
-    def action_remove(self) -> None:
-        """Return only manual queue indices; original-source rows cannot be deleted."""
+    def selected_key(self) -> object | None:
+        """Return the identity rendered in the selected row, not a fresh queue index."""
         row = self.query_one("#queue-items", DataTable).cursor_row
-        if 0 <= row < len(self.pending):
-            self.dismiss(row)
+        return self._row_keys[row] if 0 <= row < len(self._row_keys) else None
+
+    def refresh_queue(self) -> None:
+        """Redraw changed state and retain the selected manual entry by identity."""
+        state = self.get_state()
+        signature = (
+            state.current,
+            tuple((id(item.key), item.track) for item in state.pending),
+            state.upcoming,
+            state.has_more,
+            state.source_label,
+        )
+        if signature == self._signature:
+            return
+        table = self.query_one("#queue-items", DataTable)
+        selected = self.selected_key()
+        row = table.cursor_row
+        self._signature = signature
+        current = (
+            f"正在播放：{state.current.title} · {state.current.artist}"
+            if state.current
+            else "当前没有播放歌曲"
+        )
+        self.query_one("#queue-current", Static).update(current)
+        self.query_one("#queue-source", Static).update(
+            f"播放来源：{state.source_label or '尚未选择'}\n" "手动待播优先播放，听完后继续原列表。"
+        )
+        table.clear()
+        self._row_keys = []
+        for index, item in enumerate(state.pending):
+            table.add_row(f"待播 {index + 1}", Text(item.track.title), Text(item.track.artist))
+            self._row_keys.append(item.key)
+        for index, track in enumerate(state.upcoming):
+            table.add_row(f"随后 {index + 1}", Text(track.title), Text(track.artist))
+            self._row_keys.append(None)
+        if selected is not None:
+            row = next((index for index, key in enumerate(self._row_keys) if key is selected), row)
+        if self._row_keys:
+            table.move_cursor(row=min(row, len(self._row_keys) - 1))
+        notice = (
+            "暂无待播歌曲，返回列表按 A 添加。" if not state.pending and not state.upcoming else ""
+        )
+        if state.has_more:
+            notice = "原列表还有后续页面，播放时会继续加载。"
+        self.query_one("#queue-notice", Static).update(notice)
+        self.query_one("#queue-notice", Static).display = bool(notice)
+
+    def action_edit(self, operation: str) -> None:
+        """Edit the displayed manual identity and leave the queue dialog open."""
+        key = self.selected_key()
+        if operation == "clear" or key is not None:
+            self.edit(operation, None if operation == "clear" else key)
+            self.refresh_queue()
 
     def action_cancel(self) -> None:
-        """Close the queue snapshot without editing it."""
+        """Close the queue while keeping edits and ongoing playback intact."""
         self.dismiss(None)
 
 

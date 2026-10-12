@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -94,3 +95,58 @@ class SessionStore:
         value = self._sessions()
         value.setdefault(source_key, {})[account_id] = snapshot
         self._write("sessions.json", value)
+
+    @staticmethod
+    def _valid_history_entry(record: dict) -> bool:
+        """Check the metadata needed to display and reopen a recent playback record."""
+        return (
+            isinstance(record, dict)
+            and isinstance(record.get("track"), dict)
+            and isinstance(record["track"].get("mid"), str)
+            and bool(record["track"]["mid"])
+            and "source" in record
+            and isinstance(record["source"], dict | str | type(None))
+            and type(record.get("page")) is int
+            and record["page"] > 0
+            and isinstance(record.get("played_at"), str)
+        )
+
+    def _history(self) -> dict:
+        """Load account-scoped histories and reject malformed existing records."""
+        value = self._read("history.json")
+        if any(
+            not isinstance(accounts, dict)
+            or any(
+                not isinstance(records, list)
+                or any(not self._valid_history_entry(record) for record in records)
+                for records in accounts.values()
+            )
+            for accounts in value.values()
+        ):
+            raise ValueError(f"最近播放文件格式无效：{self.directory / 'history.json'}")
+        return value
+
+    def history(self, source_key: str, account_id: str) -> list[dict]:
+        """Return this platform account's most recent songs, newest first."""
+        if not account_id:
+            return []
+        return self._history().get(source_key, {}).get(account_id, [])
+
+    def record_play(self, source_key: str, account_id: str, record: dict) -> None:
+        """Move a played song to the front with a UTC timestamp and keep at most 100 songs."""
+        if not account_id:
+            return
+        entry = {
+            **record,
+            "played_at": datetime.now(UTC).isoformat(),
+        }
+        if not self._valid_history_entry(entry):
+            raise ValueError("最近播放记录格式无效")
+        entry = {key: entry[key] for key in ("track", "source", "page", "played_at")}
+        value = self._history()
+        accounts = value.setdefault(source_key, {})
+        records = accounts.get(account_id, [])
+        accounts[account_id] = [entry] + [
+            previous for previous in records if previous["track"]["mid"] != entry["track"]["mid"]
+        ][:99]
+        self._write("history.json", value)

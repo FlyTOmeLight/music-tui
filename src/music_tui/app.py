@@ -18,10 +18,19 @@ from textual.containers import Center, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Static
 
+from .history_screen import HistoryEntry, HistoryScreen
 from .models import LoginState, Playlist, Quality, SongPage, Track
 from .netease_config import load_enhanced_config, load_official_config
+from .playback_screen import PlaybackScreen, PlaybackState
 from .player import Player
-from .screens import HelpScreen, LyricsScreen, PlaylistPickerScreen, QueueScreen
+from .screens import (
+    HelpScreen,
+    LyricsScreen,
+    PlaylistPickerScreen,
+    QueueItem,
+    QueueScreen,
+    QueueState,
+)
 from .session import SessionStore
 from .sources import MusicSource
 from .sources.netease_openapi import OfficialAPIError
@@ -333,6 +342,8 @@ class MusicApp(App):
         Binding("f4", "lyrics", "歌词", priority=True),
         Binding("f5", "retry", "重试", priority=True, show=False),
         Binding("f6", "resume_session", "继续上次", priority=True, show=False),
+        Binding("f7", "playback", "播放页", priority=True),
+        Binding("f8", "history", "最近播放", priority=True),
         Binding("a", "enqueue", "下一首播放", show=False),
         Binding("s", "like", "喜欢", show=False),
         Binding("w", "add_to_playlist", "加入歌单", show=False),
@@ -397,6 +408,8 @@ class MusicApp(App):
         self.index = -1
         self.current: Track | None = None
         self.playback_track: Track | None = None
+        self.playback_origin: QueuedTrack | None = None
+        self.queue_origin: QueuedTrack | None = None
         self.playback_position = 0.0
         self.playback_paused = False
         self.playback_volume = 70.0
@@ -404,6 +417,7 @@ class MusicApp(App):
         self.manual_current: QueuedTrack | None = None
         self.failed_request: tuple[int, int] | None = None
         self.library_busy = False
+        self.last_status_message = "F7 播放页 · F8 最近播放 · F1 帮助"
         self.session_saved_at = 0.0
         self.loading = False
         self.now_playing_text = "尚未播放"
@@ -489,6 +503,8 @@ class MusicApp(App):
                     "paused": self.playback_paused,
                     "pending": [queued(entry) for entry in self.pending_tracks],
                     "manual": queued(self.manual_current) if self.manual_current else None,
+                    "origin": queued(self.playback_origin) if self.playback_origin else None,
+                    "queue_origin": queued(self.queue_origin) if self.queue_origin else None,
                     "shuffle_pages": {
                         str(page): {"tracks": [asdict(t) for t in tracks], "more": more}
                         for page, (tracks, more) in self.shuffle_pages.items()
@@ -567,6 +583,7 @@ class MusicApp(App):
 
     def status(self, message: str) -> None:
         """Replace the status-line message without changing the active view."""
+        self.last_status_message = message
         self.query_one("#status", Static).update(message)
 
     @work
@@ -591,7 +608,25 @@ class MusicApp(App):
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Keep application controls idle while platform ownership changes."""
-        return not self.switching or action == "quit"
+        if self.switching:
+            return action == "quit"
+        closable = {
+            "help": HelpScreen,
+            "queue": QueueScreen,
+            "lyrics": LyricsScreen,
+            "history": HistoryScreen,
+        }
+        if action in closable and isinstance(self.screen, closable[action]):
+            return False
+        if isinstance(self.screen, (PlaybackScreen, ModalScreen)) and action in (
+            "enqueue",
+            "like",
+            "add_to_playlist",
+            "previous_page",
+            "next_page",
+        ):
+            return False
+        return True
 
     def action_platform(self) -> None:
         """Open the platform menu from browsing or a focused search field."""
@@ -870,6 +905,7 @@ class MusicApp(App):
 
     def action_filter(self) -> None:
         """Focus playlist search when the current view supports it."""
+        self.return_to_browse()
         field = self.query_one("#filter", Input)
         if field.display:
             field.focus()
@@ -913,6 +949,7 @@ class MusicApp(App):
             self.status("播放器尚未就绪")
             return
         self.queue = self.tracks.copy()
+        self.queue_origin = None
         self.queue_generation += 1
         self.workers.cancel_group(self, "queue-view")
         self.loading = True
@@ -973,6 +1010,7 @@ class MusicApp(App):
                 self.current_quality = None
                 self.manual_current = None
                 self.playback_track = None
+                self.playback_origin = None
                 self.failed_request = None
                 self.index = len(self.queue) - 1
                 self.status("播放队列已结束")
@@ -982,17 +1020,39 @@ class MusicApp(App):
             track = self.queue[index]
             self.manual_current = None
             resolved = True
-            await self.load_track(track, quality, resume=resume)
+            origin = (
+                self.queue_origin
+                if (
+                    self.queue_source is None
+                    and self.queue_origin is not None
+                    and self.queue_origin.track == track
+                )
+                else None
+            )
+            await self.load_track(track, quality, resume=resume, origin=origin)
         except Exception as error:
             self.failed_request = (index, 0 if resolved else shuffle)
             self.status(f"{error_text(error)} · F5 重试 · N 下一首")
         finally:
             self.loading = False
 
-    async def load_track(self, track: Track, quality: Quality, *, resume: bool = False) -> None:
+    async def load_track(
+        self,
+        track: Track,
+        quality: Quality,
+        *,
+        resume: bool = False,
+        origin: QueuedTrack | None = None,
+    ) -> None:
         """Load a queue song and retain its identity and progress for explicit recovery."""
         if isinstance(self.screen, LyricsScreen):
             self.pop_screen()
+        if not resume or origin is not None:
+            self.playback_origin = (
+                origin
+                or self.manual_current
+                or QueuedTrack(track, self.queue_source, self.queue_page)
+            )
         if resume and self.current is not None:
             self.playback_position = float(self.player.properties.get("time-pos") or 0)
             self.playback_paused = bool(self.player.properties.get("pause"))
@@ -1015,7 +1075,8 @@ class MusicApp(App):
         self.current_quality = quality
         self.failed_request = None
         self.mark_playing_track()
-        self.status("Space 暂停 · N/P 切歌 · F3 队列 · F4 歌词 · F1 帮助")
+        self.status("Space 暂停 · N/P 切歌 · F7 播放页 · F8 最近播放 · F1 帮助")
+        self.record_recent(track)
 
     @work(exclusive=True, group="play")
     async def play_manual(
@@ -1175,12 +1236,15 @@ class MusicApp(App):
 
     def action_search(self) -> None:
         """Focus the global song and artist search field."""
+        self.return_to_browse()
         self.query_one("#search", Input).focus()
 
     def quality_track(self) -> Track | None:
         """Choose the active track, falling back to the highlighted song row."""
         if self.current:
             return self.current
+        if isinstance(self.screen, PlaybackScreen) and self.playback_track is not None:
+            return self.playback_track
         row = self.query_one("#songs", DataTable).cursor_row
         return self.tracks[row] if 0 <= row < len(self.tracks) else None
 
@@ -1225,10 +1289,15 @@ class MusicApp(App):
             else:
                 self.play_index(self.index, resume=self.current is not None)
         else:
-            self.status(f"已选择 {quality.label}，下一首播放时生效")
+            self.status(
+                f"已选择 {quality.label}，按 F5 重试当前歌曲"
+                if isinstance(self.screen, PlaybackScreen) and self.playback_track is not None
+                else f"已选择 {quality.label}，下一首播放时生效"
+            )
 
     def action_songs(self) -> None:
         """Return keyboard focus to the song table."""
+        self.return_to_browse()
         self.query_one("#songs", DataTable).focus()
 
     def action_previous_page(self) -> None:
@@ -1280,58 +1349,253 @@ class MusicApp(App):
                 return
             if isinstance(self.screen, ModalScreen):
                 return
-        snapshot = self.pending_tracks.copy()
+        self.push_screen(QueueScreen(self.get_queue_state, self.edit_pending_queue))
+
+    def get_queue_state(self) -> QueueState:
+        """Expose current manual entries and known source successors for live queue views."""
         if self.repeat_mode == RepeatMode.RANDOM and self.shuffle_pages:
             positions = self.shuffle_history[self.shuffle_cursor + 1 :] + list(
                 reversed(self.shuffle_remaining)
             )
             upcoming = [self.shuffle_pages[page][0][index] for page, index in positions]
             more = False
+        elif self.repeat_mode == RepeatMode.RANDOM:
+            upcoming = []
+            more = self.queue_has_more
         else:
             upcoming = self.queue[self.index + 1 :]
             more = self.queue_has_more
-        source = self.queue_source
-        label = (
-            source.playlist.title
-            if isinstance(source, PlaylistSearch)
-            else source.title if isinstance(source, Playlist) else source or "手动待播"
+        source = self.queue_source or (
+            self.playback_origin.source if self.playback_origin is not None else None
         )
+        label = self.source_label(source) or "手动待播"
         if self.repeat_mode == RepeatMode.RANDOM:
             label += " · 随机播放"
 
-        def remove(index: int | None) -> None:
-            """Apply deletion only to an unchanged snapshot, then refresh the queue view."""
-            if index is None:
-                return
-            if self.pending_tracks == snapshot:
-                del self.pending_tracks[index]
-                self.save_state()
-            else:
-                self.status("播放队列已变化，请重新选择要删除的歌曲")
-            self.action_queue()
-
-        self.push_screen(
-            QueueScreen(
-                self.current,
-                [entry.track for entry in snapshot],
-                upcoming,
-                more,
-                label,
-            ),
-            remove,
+        return QueueState(
+            self.current,
+            tuple(QueueItem(entry, entry.track) for entry in self.pending_tracks),
+            tuple(upcoming),
+            more,
+            label,
         )
+
+    def edit_pending_queue(self, action: str, key: object | None) -> None:
+        """Edit only the identified manual entry, preserving playback and the source cursor."""
+        if self.switching:
+            return
+        if action == "clear":
+            self.pending_tracks.clear()
+            self.status("已清空手动待播，当前歌曲和原列表继续播放")
+        else:
+            index = next((i for i, entry in enumerate(self.pending_tracks) if entry is key), None)
+            if index is None:
+                self.status("这首歌已离开待播队列，请选择当前的待播项")
+                return
+            if action == "remove":
+                entry = self.pending_tracks.pop(index)
+                self.status(f"已移除手动待播：{entry.track.title}")
+            elif action in ("up", "down"):
+                destination = index + (-1 if action == "up" else 1)
+                if not 0 <= destination < len(self.pending_tracks):
+                    return
+                self.pending_tracks[index], self.pending_tracks[destination] = (
+                    self.pending_tracks[destination],
+                    self.pending_tracks[index],
+                )
+                self.status("已调整手动待播顺序")
+            else:
+                return
+        self.save_state()
+
+    @staticmethod
+    def source_label(source: str | Playlist | PlaylistSearch | None) -> str:
+        """Describe a browsing origin using platform-independent song-library names."""
+        if isinstance(source, PlaylistSearch):
+            return f"{source.playlist.title} · 筛选：{source.keyword}"
+        if isinstance(source, Playlist):
+            return source.title
+        return f"搜索：{source}" if source else ""
+
+    def get_playback_state(self) -> PlaybackState:
+        """Read shared playback state for the full player page without new audio ownership."""
+        track = self.current or self.playback_track
+        properties = self.player.properties
+        queue = self.get_queue_state()
+        next_track = (
+            queue.pending[0].track
+            if queue.pending
+            else (queue.upcoming[0] if queue.upcoming else None)
+        )
+        hint = ""
+        if next_track is None:
+            if self.repeat_mode == RepeatMode.SINGLE and track is not None:
+                hint = "当前歌曲结束后重播；N 可手动切歌"
+            elif self.queue and self.repeat_mode == RepeatMode.RANDOM:
+                hint = "下一首按随机顺序选择"
+            elif self.queue and self.repeat_mode == RepeatMode.LIST:
+                hint = "列表结束后从开头继续"
+            elif queue.has_more:
+                hint = "下一首将从后续页面加载"
+            else:
+                hint = "没有后续歌曲；返回列表按 A 添加手动待播"
+        origin = self.playback_origin
+        return PlaybackState(
+            track=track,
+            position=(
+                float(properties.get("time-pos") or 0) if self.current else self.playback_position
+            ),
+            duration=(
+                (
+                    float(properties.get("duration") or track.seconds)
+                    if self.current
+                    else float(track.seconds)
+                )
+                if track
+                else 0
+            ),
+            paused=bool(properties.get("pause")) if self.current else self.playback_paused,
+            buffering=bool(properties.get("paused-for-cache")) if self.current else False,
+            volume=int(properties.get("volume") or 0),
+            quality=(self.current_quality or self.quality).label,
+            repeat_mode=self.repeat_mode.value,
+            source_label=self.source_label(origin.source) if origin else queue.source_label,
+            platform=self.music.display_name,
+            loading=self.loading,
+            ready=self.ready,
+            active=self.current is not None,
+            status=self.last_status_message,
+            pending_count=len(self.pending_tracks),
+            next_track=next_track,
+            next_hint=hint,
+        )
+
+    def action_playback(self) -> None:
+        """Toggle the independent playback page while keeping the browser and queue intact."""
+        if isinstance(self.screen, PlaybackScreen):
+            self.pop_screen()
+        elif not isinstance(self.screen, ModalScreen):
+            self.push_screen(PlaybackScreen(self.get_playback_state, self.handle_playback_action))
+
+    def return_to_browse(self) -> None:
+        """Leave the playback page before moving focus or loading a browsing origin."""
+        if isinstance(self.screen, PlaybackScreen):
+            self.pop_screen()
+
+    def handle_playback_action(self, action: str) -> None:
+        """Route page controls to the same application actions used by keyboard shortcuts."""
+        if self.switching:
+            return
+        if action == "browse":
+            self.return_to_browse()
+            return
+        actions = {
+            "previous": self.action_previous,
+            "pause": self.action_pause,
+            "next": self.action_next,
+            "quality": self.action_quality,
+            "queue": self.action_queue,
+            "lyrics": self.action_lyrics,
+            "retry": self.action_retry,
+            "help": self.action_help,
+            "platform": self.action_platform,
+            "resume_session": self.action_resume_session,
+            "search": self.action_search,
+            "locate": self.action_locate,
+            "filter": self.action_filter,
+        }
+        if callback := actions.get(action):
+            callback()
+
+    def record_recent(self, track: Track) -> None:
+        """Record accepted playback with a small origin reference and no temporary URL."""
+        if self.session_store is None:
+            return
+        origin = self.playback_origin
+        source = origin.source if origin else self.queue_source
+        page = origin.page if origin else self.queue_page
+        if isinstance(source, PlaylistSearch):
+            source, page = source.playlist, 1
+        try:
+            self.session_store.record_play(
+                self.source_key,
+                self.active_account_id,
+                {"track": asdict(track), "source": encode_source(source), "page": page},
+            )
+        except (OSError, ValueError) as error:
+            self.status(f"播放正常，但无法保存最近播放：{error_text(error)}")
+
+    def action_history(self) -> None:
+        """Open this account's recent songs and source shortcuts without changing playback."""
+        if isinstance(self.screen, ModalScreen):
+            return
+        if self.session_store is None:
+            self.status("最近播放存储尚未启用")
+            return
+        try:
+            records = self.session_store.history(self.source_key, self.active_account_id)
+            entries = [
+                HistoryEntry(
+                    decode_track(record["track"]),
+                    self.source_label(decode_source(record["source"])),
+                    record["played_at"],
+                    record,
+                )
+                for record in records
+            ]
+            self.push_screen(HistoryScreen(entries), self.choose_recent)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            self.status(f"无法读取最近播放：{error_text(error)}")
+
+    def choose_recent(self, choice: tuple[str, dict] | None) -> None:
+        """Play a recent song or open its saved origin while retaining current audio."""
+        if choice is None:
+            return
+        action, record = choice
+        if action == "play":
+            self.play_recent(record)
+        elif action == "open":
+            source = decode_source(record["source"])
+            if source is not None:
+                self.return_to_browse()
+                self.load_view(source, page=record["page"])
+
+    @work(exclusive=True, group="play")
+    async def play_recent(self, record: dict) -> None:
+        """Play one recent song with a fresh URL and retain its original navigation context."""
+        if not self.ready:
+            self.status("播放器尚未就绪")
+            return
+        self.loading = True
+        try:
+            track = decode_track(record["track"])
+            origin = QueuedTrack(track, decode_source(record["source"]), int(record["page"]))
+            self.queue_generation += 1
+            self.workers.cancel_group(self, "queue-view")
+            self.queue, self.queue_source, self.queue_page = [track], None, 1
+            self.queue_origin = origin
+            self.queue_has_more, self.index = False, 0
+            self.pending_tracks.clear()
+            self.manual_current = None
+            self.failed_request = None
+            self.reset_shuffle(0)
+            await self.load_track(track, self.quality, origin=origin)
+        except Exception as error:
+            self.status(f"{error_text(error)} · F5 重试")
+        finally:
+            self.loading = False
 
     @work(exclusive=True, group="view")
     async def action_locate(self) -> None:
         """Return to the active song's original browsing page without replacing playback."""
+        self.return_to_browse()
         track = self.playback_track
         if track is None:
             self.status("尚未播放歌曲")
             return
+        origin = self.playback_origin or self.manual_current
         source, page = (
-            (self.manual_current.source, self.manual_current.page)
-            if self.manual_current is not None
-            else (self.queue_source, self.queue_page)
+            (origin.source, origin.page) if origin else (self.queue_source, self.queue_page)
         )
         if source is None:
             self.status("当前歌曲没有浏览来源")
@@ -1477,6 +1741,16 @@ class MusicApp(App):
             position = max(0, float(snapshot["position"]))
             pending = [queued(value) for value in snapshot["pending"]]
             manual = queued(snapshot["manual"]) if snapshot["manual"] else None
+            origin = (
+                queued(snapshot["origin"])
+                if snapshot.get("origin")
+                else (manual or QueuedTrack(track, source, page))
+            )
+            queue_origin = (
+                queued(snapshot["queue_origin"])
+                if snapshot.get("queue_origin")
+                else (origin if source is None and manual is None else None)
+            )
             pages = {
                 int(key): ([decode_track(value) for value in entry["tracks"]], entry["more"])
                 for key, entry in snapshot["shuffle_pages"].items()
@@ -1504,6 +1778,8 @@ class MusicApp(App):
             self.queue, self.queue_source = tracks, source
             self.queue_page, self.queue_has_more, self.index = page, snapshot["has_more"], index
             self.pending_tracks, self.manual_current = pending, manual
+            self.playback_origin = origin
+            self.queue_origin = queue_origin
             self.shuffle_pages, self.shuffle_remaining = pages, remaining
             self.shuffle_history, self.shuffle_cursor = history, cursor
             self.playback_position, self.playback_paused = position, bool(snapshot["paused"])

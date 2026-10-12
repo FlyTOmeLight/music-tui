@@ -6,7 +6,14 @@ from textual.containers import VerticalScroll
 from textual.widgets import DataTable, Input, Label, Static
 
 from music_tui.models import LyricLine, Lyrics, Playlist, Track
-from music_tui.screens import HelpScreen, LyricsScreen, PlaylistPickerScreen, QueueScreen
+from music_tui.screens import (
+    HelpScreen,
+    LyricsScreen,
+    PlaylistPickerScreen,
+    QueueItem,
+    QueueScreen,
+    QueueState,
+)
 
 FIRST = Track("a", "[red]第一首[/red]", "歌手 A", 120)
 SECOND = Track("b", "第二首", "歌手 B", 90)
@@ -36,7 +43,10 @@ async def test_dialog_controls_fit_and_escape_restores_focus(size, dialog_name):
     app = ScreenHarness()
     dialogs = {
         "help": HelpScreen(),
-        "queue": QueueScreen(FIRST, [SECOND], [FIRST], True, "[blue]歌单[/blue]"),
+        "queue": QueueScreen(
+            lambda: QueueState(FIRST, (QueueItem(object(), SECOND),), (FIRST,), True, "歌单"),
+            lambda operation, key: None,
+        ),
         "lyrics": LyricsScreen(FIRST, Lyrics(), lambda: 0),
         "playlist": PlaylistPickerScreen([Playlist(1, "歌单", editable=True)]),
     }
@@ -70,24 +80,127 @@ async def test_help_scrolls_and_function_key_closes():
         assert not isinstance(app.screen, HelpScreen)
 
 
-async def test_queue_delete_returns_only_manual_index_and_preserves_markup():
-    """Protect source rows from deletion and return the selected manual row index."""
+async def test_queue_delete_uses_manual_identity_and_stays_open():
+    """Protect original rows, delegate manual deletion, and display literal metadata."""
     app = ScreenHarness()
-    results = []
+    first, second = object(), object()
+    pending = [QueueItem(first, FIRST), QueueItem(second, SECOND)]
+    calls = []
+
+    def state():
+        """Read the application's manual queue without exposing mutable list ownership."""
+        return QueueState(FIRST, tuple(pending), (SECOND,), True, "[red]歌单[/red]")
+
+    def edit(operation, key):
+        """Apply removal by identity and record which rendered item was requested."""
+        calls.append((operation, key))
+        pending[:] = [item for item in pending if item.key is not key]
+
     async with app.run_test(size=(80, 24)) as pilot:
-        dialog = QueueScreen(FIRST, [FIRST, SECOND], [SECOND], True, "[red]歌单[/red]")
-        app.push_screen(dialog, results.append)
+        dialog = QueueScreen(state, edit)
+        app.push_screen(dialog)
         await pilot.pause()
         table = dialog.query_one(DataTable)
         assert table.get_row_at(0)[1].plain == FIRST.title
-        subtitle = dialog.query(".dialog-subtitle").last()
-        assert "[red]歌单[/red]" in str(subtitle.render())
+        assert "[red]歌单[/red]" in str(dialog.query_one("#queue-source", Static).render())
         await pilot.press("down", "down", "delete")
         await pilot.pause()
-        assert app.screen is dialog
+        assert calls == []
         await pilot.press("up", "delete")
         await pilot.pause()
-        assert results == [1]
+        assert app.screen is dialog
+        assert calls == [("remove", second)]
+        assert table.row_count == 2
+
+
+async def test_queue_reorder_and_clear_keep_focus_and_selection():
+    """Move the selected identity in both directions and clear only manual entries."""
+    app = ScreenHarness()
+    first, second = object(), object()
+    pending = [QueueItem(first, FIRST), QueueItem(second, SECOND)]
+    calls = []
+
+    def state():
+        """Expose current manual ordering with an unchanged original-source remainder."""
+        return QueueState(FIRST, tuple(pending), (FIRST,), False, "来源")
+
+    def edit(operation, key):
+        """Model the owner callback's identity-based move and clear operations."""
+        calls.append((operation, key))
+        if operation == "clear":
+            pending.clear()
+        else:
+            index = next(index for index, item in enumerate(pending) if item.key is key)
+            target = index + (-1 if operation == "up" else 1)
+            pending[index], pending[target] = pending[target], pending[index]
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        dialog = QueueScreen(state, edit)
+        app.push_screen(dialog)
+        await pilot.pause()
+        table = dialog.query_one(DataTable)
+        await pilot.press("down", "ctrl+up")
+        await pilot.pause()
+        assert dialog.selected_key() is second
+        assert table.cursor_row == 0
+        await pilot.press("ctrl+down")
+        await pilot.pause()
+        assert dialog.selected_key() is second
+        assert table.cursor_row == 1
+        await pilot.press("ctrl+delete")
+        await pilot.pause()
+        assert app.screen is dialog
+        assert app.focused is table
+        assert table.row_count == 1
+        assert calls == [("up", second), ("down", second), ("clear", None)]
+
+
+async def test_queue_updates_when_playback_consumes_a_manual_entry():
+    """Retain the selected identity when automatic playback removes an earlier row."""
+    app = ScreenHarness()
+    first, second = object(), object()
+    pending = [QueueItem(first, FIRST), QueueItem(second, SECOND)]
+    current = [FIRST]
+    calls = []
+
+    def state():
+        """Provide live playing-track and pending changes from outside the dialog."""
+        return QueueState(current[0], tuple(pending), (), False, "来源")
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        dialog = QueueScreen(state, lambda operation, key: calls.append((operation, key)))
+        app.push_screen(dialog)
+        await pilot.pause()
+        await pilot.press("down")
+        pending.pop(0)
+        current[0] = SECOND
+        await pilot.pause(0.3)
+        assert dialog.selected_key() is second
+        assert dialog.query_one(DataTable).cursor_row == 0
+        assert SECOND.title in str(dialog.query_one("#queue-current", Static).render())
+        await pilot.press("delete")
+        assert calls == [("remove", second)]
+
+
+async def test_queue_edit_uses_rendered_identity_before_timer_refresh():
+    """Pass the stale rendered token to the owner instead of deleting a replacement row."""
+    app = ScreenHarness()
+    first, second = object(), object()
+    pending = [QueueItem(first, FIRST), QueueItem(second, FIRST)]
+    calls = []
+
+    def state():
+        """Return identical track metadata for distinct manually queued identities."""
+        return QueueState(FIRST, tuple(pending), (), False, "来源")
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        dialog = QueueScreen(state, lambda operation, key: calls.append((operation, key)))
+        app.push_screen(dialog)
+        await pilot.pause()
+        pending.pop(0)
+        dialog.action_edit("remove")
+        assert calls == [("remove", first)]
+        assert dialog.selected_key() is second
 
 
 async def test_picker_filters_readonly_playlists_and_returns_selection():
@@ -112,7 +225,9 @@ async def test_empty_queue_and_picker_remain_closable(dialog_name):
     app = ScreenHarness()
     results = []
     dialog = (
-        QueueScreen(None, [], [], False, "") if dialog_name == "queue" else PlaylistPickerScreen([])
+        QueueScreen(lambda: QueueState(None, (), (), False, ""), lambda operation, key: None)
+        if dialog_name == "queue"
+        else PlaylistPickerScreen([])
     )
     async with app.run_test(size=(80, 24)) as pilot:
         app.push_screen(dialog, results.append)
