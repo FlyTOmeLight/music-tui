@@ -45,7 +45,8 @@ class OfficialClient:
         if not app_id or private_key_path is None or device_file is None:
             raise ValueError(
                 "官方 API 需要 NETEASE_APP_ID、NETEASE_PRIVATE_KEY_FILE 和 NETEASE_DEVICE_FILE；"
-                "可运行 music-tui --setup-netease 自动配置，或使用 --netease-backend enhanced"
+                "可运行 music-tui --setup-netease --netease-backend official 自动配置，"
+                "或使用 --netease-backend enhanced"
             )
         try:
             key_bytes = private_key_path.read_bytes().strip()

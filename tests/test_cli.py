@@ -11,8 +11,8 @@ from music_tui import app
 @pytest.mark.parametrize(
     "arguments, expected",
     [
-        ([], ("qq", "http://127.0.0.1:3000", "official")),
-        (["--source", "netease"], ("netease", "http://127.0.0.1:3000", "official")),
+        ([], ("qq", None, "enhanced")),
+        (["--source", "netease"], ("netease", None, "enhanced")),
         (
             [
                 "--source",
@@ -27,7 +27,7 @@ from music_tui import app
     ],
 )
 def test_main_selects_requested_platform(monkeypatch, arguments, expected):
-    """Default to QQ and prefer the official backend when selecting NetEase."""
+    """Default to QQ and prefer the Enhanced backend when selecting NetEase."""
     selected = []
 
     async def run(source, api_url, backend):
@@ -129,8 +129,9 @@ async def test_run_uses_platform_directory_and_closes_resources(
     assert closed == ["player", "music"]
 
 
-def test_missing_official_credentials_reports_error_without_fallback(monkeypatch, capsys):
+def test_missing_official_credentials_reports_error_without_fallback(monkeypatch, capsys, tmp_path):
     """Explain missing official credentials without silently selecting Enhanced."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     enhanced = importlib.import_module("music_tui.sources.netease")
 
     def unexpected_enhanced(*args, **kwargs):
@@ -141,7 +142,9 @@ def test_missing_official_credentials_reports_error_without_fallback(monkeypatch
     monkeypatch.delenv("NETEASE_PRIVATE_KEY_FILE", raising=False)
     monkeypatch.delenv("NETEASE_DEVICE_FILE", raising=False)
     monkeypatch.setattr(enhanced, "NetEaseMusic", unexpected_enhanced)
-    monkeypatch.setattr("sys.argv", ["music-tui", "--source", "netease"])
+    monkeypatch.setattr(
+        "sys.argv", ["music-tui", "--source", "netease", "--netease-backend", "official"]
+    )
     with pytest.raises(SystemExit) as error:
         app.main()
     assert error.value.code == 2

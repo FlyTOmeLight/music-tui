@@ -4,30 +4,37 @@
 
 ## 后端选择
 
-默认使用网易云官方开放平台，Python 通过 HTTPS 直接请求，无需本地 Node 服务。
-运行 `uv run music-tui --setup-netease`，向导保存应用 ID、RSA 私钥和设备配置。
-配置目录为 `$XDG_CONFIG_HOME/music-tui/`，未设置时为 `~/.config/music-tui/`；启动时自动读取。
-`NETEASE_APP_ID`、`NETEASE_PRIVATE_KEY_FILE`、`NETEASE_DEVICE_FILE` 可逐项覆盖本机配置。
-设备中网易云分配的字段需手动填写；其余字段由向导生成或检测。完整必填字段和签名、
-认证、资源 ID 契约见[官方 API 接入依据](netease-official-api.md)。
+默认使用 **NeteaseCloudMusicApiEnhanced 4.41.1**。Python 客户端请求 API 服务，
+由该服务处理网易云协议。交互式向导提供本机服务和已有服务两种配置：
 
 ```sh
-uv run music-tui --source netease
+uv run music-tui --setup-netease
+uv run music-tui --netease-service  # 本机服务，保持此终端运行
 ```
 
-官方后端将匿名令牌和扫码后的用户令牌分开管理，并在完成扫码后验证用户资料。
-当前不实现令牌刷新；令牌过期后重新扫码。官方凭证单独存放于
-`~/.local/share/music-tui/netease-official/`，凭证文件权限为 `0600`。
-官方资源 ID 保留接口返回的字符串，不转换成 Enhanced 的数字 ID。
+另一个终端执行 `uv run music-tui`，按 `F2` 选择网易云 Enhanced；
+或用 `uv run music-tui --source netease` 直接进入。
+向导自动选择本机端口，保存 `enhanced.json` 中的 `apiUrl`。
+配置目录为 `$XDG_CONFIG_HOME/music-tui/`，未设置时为 `~/.config/music-tui/`。
+`--netease-api-url` 可覆盖已保存地址；未配置时地址为 `http://127.0.0.1:3000`。
 
-没有官方应用凭证时，可显式使用 **NeteaseCloudMusicApiEnhanced 4.41.1**：
+官方后端保留为可选项，通过 HTTPS 直接请求网易云。
+已有获批应用凭证和设备配置时，运行：
 
 ```sh
-uv run music-tui --source netease --netease-backend enhanced
+uv run music-tui --netease-backend official --setup-netease
+uv run music-tui --source netease --netease-backend official
 ```
 
-两个后端不共享凭证或资源 ID。官方配置、网络、权限或接口失败均直接报告错误，
-不会静默切换后端。官方真实扫码和会员播放需获批应用凭证验证。
+官方向导保存应用 ID、RSA 私钥和设备配置。
+`NETEASE_APP_ID`、`NETEASE_PRIVATE_KEY_FILE`、`NETEASE_DEVICE_FILE` 可逐项覆盖。
+设备参数和协议依据见[官方 API 接入依据](netease-official-api.md)。
+官方匿名令牌与用户令牌分开管理；扫码后验证用户资料，令牌过期后重新扫码。
+官方凭证单独存放于 `~/.local/share/music-tui/netease-official/`，权限为 `0600`。
+官方资源 ID 保留字符串，不转换成 Enhanced 的数字 ID。
+
+两个后端不共享凭证或资源 ID。网络、权限和接口失败直接报告，不会自动切换。
+官方真实扫码和会员播放需获批应用凭证验证。
 
 ## Enhanced 接入依据
 
@@ -49,6 +56,9 @@ Enhanced 后端通过 `httpx.AsyncClient` 调用本机服务，不另行实现�
 
 ## 本地服务
 
+`uv run music-tui --netease-service` 使用向导保存的本机地址启动固定版本服务。
+手动启动时可使用：
+
 ```sh
 HOST=127.0.0.1 PORT=3000 ENABLE_GENERAL_UNBLOCK=false ENABLE_PROXY=false \
   npx --yes @neteasecloudmusicapienhanced/api@4.41.1
@@ -65,7 +75,7 @@ Python 同时发送 `unblock="false"`，避免模块级解锁。
 ## 请求与响应契约
 
 下列接口均使用 POST JSON。每次请求带毫秒 `timestamp`，避免登录状态缓存。
-`cookie` 放在请求体中，不放入 URL。服务地址可配置；默认 `http://127.0.0.1:3000`。
+`cookie` 放在请求体中，不放入 URL。服务地址优先读取命令行覆盖项，再读取向导配置；未配置时为 `http://127.0.0.1:3000`。
 客户端设置 25 秒超时、`trust_env=False`，不读取环境代理。
 错误提示只包含业务状态码，不展示响应正文或 Cookie。
 
@@ -111,3 +121,9 @@ Black、Ruff 及模块/函数 docstring 检查通过。
 使用 Enhanced 4.41.1 本机服务实测了匿名搜索（30 条结果及总数）、PNG 二维码获取、
 热歌榜分页（首 100 首、总计 200 首）。匿名歌曲接口返回的试听音源被正确排除。
 手机确认后的真实账号恢复、个人歌单和会员完整播放未在本轮登录实测。
+
+
+新增 Enhanced 向导与服务启动器后，完整测试 154 项通过。
+使用隔离临时配置实测了自动选端口、`--netease-service` 启动固定版本服务、
+匿名搜索（30 条结果及总数）和有效 PNG 二维码获取。测试服务已停止。
+手机确认后的真实账号登录与会员播放仍需用户账号验证。

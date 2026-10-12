@@ -62,7 +62,9 @@ class NetEaseMusic:
             response.raise_for_status()
             result = response.json()
         except (httpx.HTTPError, ValueError) as error:
-            raise ValueError("无法访问网易云 API，请检查本地服务地址和运行状态") from error
+            raise ValueError(
+                "无法访问网易云 API，请运行 music-tui --netease-service，或检查已配置的服务地址"
+            ) from error
         if not isinstance(result, dict):
             raise ValueError("网易云 API 返回了无效响应")
         allowed = {200, 800, 801, 802, 803} if qr else {200}

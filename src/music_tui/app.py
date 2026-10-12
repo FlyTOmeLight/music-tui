@@ -19,7 +19,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Static
 
 from .models import LoginState, Playlist, Quality, SongPage, Track
-from .netease_config import load_official_config
+from .netease_config import load_enhanced_config, load_official_config
 from .player import Player
 from .sources import MusicSource
 from .sources.netease_openapi import OfficialAPIError
@@ -173,8 +173,8 @@ class PlatformScreen(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "cancel", "返回")]
     OPTIONS = [
         ("qq", "QQ 音乐"),
-        ("netease-official", "网易云音乐 · 官方 API（优先）"),
-        ("netease-enhanced", "网易云音乐 · Enhanced"),
+        ("netease-enhanced", "网易云音乐 · Enhanced（推荐）"),
+        ("netease-official", "网易云音乐 · 官方 API（可选）"),
     ]
     DEFAULT_CSS = """
     PlatformScreen { align: center middle; background: $background 95%; }
@@ -189,7 +189,7 @@ class PlatformScreen(ModalScreen[str | None]):
         self.selected = selected
 
     def compose(self) -> ComposeResult:
-        """Show the official service first among NetEase choices."""
+        """Put the recommended third-party backend first among NetEase choices."""
         with Vertical(id="platform-box"):
             yield Static("切换音乐平台")
             yield ListView(
@@ -198,8 +198,8 @@ class PlatformScreen(ModalScreen[str | None]):
                 id="platform-options",
             )
             yield Static(
-                "官方：需应用凭证和设备配置。\n"
-                "Enhanced：需本地 API 服务。\n"
+                "Enhanced：运行 --setup-netease 配置服务。\n"
+                "官方：仅适用于已取得应用授权和设备参数的用户。\n"
                 "切换后停止播放并清空队列，保留各平台登录凭证。\n"
                 "↑/↓ 选择 · Enter 确认 · Esc 返回",
                 id="platform-help",
@@ -996,8 +996,8 @@ class MusicApp(App):
 
 async def run(
     source: str = "qq",
-    netease_api_url: str = "http://127.0.0.1:3000",
-    netease_backend: str = "official",
+    netease_api_url: str | None = None,
+    netease_backend: str = "enhanced",
 ) -> None:
     """Run the selected music source with mpv and close both resources on exit."""
     data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
@@ -1019,7 +1019,8 @@ async def run(
         if key == "netease-enhanced":
             from .sources.netease import NetEaseMusic
 
-            return NetEaseMusic(data_home / "music-tui" / "netease", api_url=netease_api_url)
+            api_url = netease_api_url or load_enhanced_config()["apiUrl"]
+            return NetEaseMusic(data_home / "music-tui" / "netease", api_url=api_url)
         return QQMusic(data_home / "qqmusic-tui")
 
     key = f"netease-{netease_backend}" if source == "netease" else "qq"
@@ -1040,24 +1041,34 @@ def main() -> None:
     parser.add_argument(
         "--netease-backend",
         choices=("official", "enhanced"),
-        default="official",
-        help="NetEase API backend (default: official)",
+        default="enhanced",
+        help="NetEase API backend (default: enhanced)",
     )
     parser.add_argument(
         "--netease-api-url",
-        default="http://127.0.0.1:3000",
-        help="NeteaseCloudMusicApiEnhanced service URL (enhanced backend only)",
+        default=None,
+        help="Override the saved NeteaseCloudMusicApiEnhanced service URL",
     )
-    parser.add_argument(
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument(
         "--setup-netease",
         action="store_true",
-        help="Interactively configure the official NetEase API",
+        help="Configure NetEase access (Enhanced by default)",
+    )
+    actions.add_argument(
+        "--netease-service",
+        action="store_true",
+        help="Run the configured local Enhanced API service",
     )
     arguments = parser.parse_args()
     if arguments.setup_netease:
         from .netease_config import run_setup
 
-        raise SystemExit(run_setup())
+        raise SystemExit(run_setup(arguments.netease_backend))
+    if arguments.netease_service:
+        from .netease_enhanced_setup import run_service
+
+        raise SystemExit(run_service())
     try:
         asyncio.run(run(arguments.source, arguments.netease_api_url, arguments.netease_backend))
     except ValueError as error:

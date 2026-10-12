@@ -159,7 +159,7 @@ async def test_f2_opens_selector_from_search_and_escape_or_current_selection_is_
 async def test_selector_enter_changes_platform_and_offers_login_for_unsaved_account():
     """Select NetEase through the dialog without requiring an existing login."""
     original = PlatformLibrary("qq")
-    candidate = PlatformLibrary("netease-official", logged_in=False)
+    candidate = PlatformLibrary("netease-enhanced", logged_in=False)
 
     def factory(key):
         """Return the selected NetEase account client."""
@@ -222,7 +222,7 @@ async def test_cancelled_old_search_finishes_before_new_platform_state_is_applie
 async def test_cancel_after_source_transfer_closes_previous_client(monkeypatch):
     """Release the old source when exit interrupts the interface reset after transfer."""
     original = PlatformLibrary("qq", logged_in=False)
-    candidate = PlatformLibrary("netease-official", logged_in=False)
+    candidate = PlatformLibrary("netease-enhanced", logged_in=False)
     clearing = asyncio.Event()
 
     def factory(key):

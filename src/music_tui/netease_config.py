@@ -1,4 +1,4 @@
-"""Locate saved official NetEase configuration and apply explicit environment overrides."""
+"""Read independent official and Enhanced NetEase profiles and launch setup guides."""
 
 import json
 import os
@@ -20,7 +20,9 @@ def load_official_config() -> dict:
             if not isinstance(config, dict):
                 raise ValueError("Invalid configuration object")
         except (OSError, ValueError) as error:
-            raise ValueError("网易云配置无法读取，请运行 music-tui --setup-netease") from error
+            raise ValueError(
+                "网易云配置无法读取，请运行 music-tui --setup-netease --netease-backend official"
+            ) from error
     for field, variable in {
         "appId": "NETEASE_APP_ID",
         "privateKeyFile": "NETEASE_PRIVATE_KEY_FILE",
@@ -31,13 +33,30 @@ def load_official_config() -> dict:
     return config
 
 
-def run_setup() -> int:
+def load_enhanced_config() -> dict:
+    """Load the third-party service address without consulting official credentials."""
+    path = config_directory() / "enhanced.json"
+    if not path.exists():
+        return {"apiUrl": "http://127.0.0.1:3000"}
+    try:
+        config = json.loads(path.read_text())
+        if not isinstance(config, dict) or not isinstance(config.get("apiUrl"), str):
+            raise ValueError("Invalid Enhanced configuration")
+        if not config["apiUrl"]:
+            raise ValueError("Empty Enhanced URL")
+        return config
+    except (OSError, ValueError) as error:
+        raise ValueError("Enhanced 配置无法读取，请运行 music-tui --setup-netease") from error
+
+
+def run_setup(backend: str = "enhanced") -> int:
     """Launch the bundled terminal wizard with this installation's Python interpreter."""
     import subprocess
     import sys
     from importlib.resources import as_file, files
 
-    script = files("music_tui").joinpath("scripts/setup-netease.sh")
+    filename = "setup-netease.sh" if backend == "official" else "setup-netease-enhanced.sh"
+    script = files("music_tui").joinpath(f"scripts/{filename}")
     try:
         with as_file(script) as path:
             result = subprocess.run(
