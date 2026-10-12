@@ -32,7 +32,7 @@ Use pytest and pytest-asyncio with automatic asyncio mode. Name files `test_*.py
 
 ## Commit & Pull Request Guidelines
 
-Use `release` for new features and release preparation, and `bugfix` for defect fixes. Keep `main` as the stable integration branch. Start feature work from `release`; start fixes from `bugfix`, and bring relevant fixes into `release` before its next release. Check the current branch before editing code and keep each branch's changes focused on its purpose.
+Keep `main` as the stable integration branch. Use `release-v<major>.<minor>.<patch>` for new features and release preparation for that version, for example `release-v0.2.0`. Create a separate `bugfix-<short-kebab-case-description>` branch from `main` for each defect, for example `bugfix-playback-retry`. Integrate completed fixes into `main` and the active release branch when applicable. Check the current branch before editing code and keep each branch's changes focused on its purpose.
 
 Use concise, imperative commit subjects. PRs should describe resulting behavior, link relevant issues, and report checks. Include 80×24 terminal screenshots for layout changes.
 
