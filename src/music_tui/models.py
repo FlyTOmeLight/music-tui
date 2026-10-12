@@ -40,7 +40,7 @@ class Track:
 class Playlist:
     """Playlist identity, title, and source-reported track count."""
 
-    id: int
+    id: int | str
     title: str
     dirid: int = 0
     favorite: bool = False

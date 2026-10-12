@@ -1,10 +1,34 @@
 # 网易云音乐接入方案
 
-## 选择
+## 后端选择
 
-本次使用本机运行的 **NeteaseCloudMusicApiEnhanced 4.41.1**。Python 端通过
-`httpx.AsyncClient` 调用 HTTP 接口，不另行实现加密协议。接口兼容性取决于服务版本；
-Python 3.13 侧只新增 HTTP 客户端依赖，没有 Node 扩展或 Python 加密库。
+默认使用网易云官方开放平台，Python 通过 HTTPS 直接请求，无需本地 Node 服务。
+使用 `NETEASE_APP_ID`、`NETEASE_PRIVATE_KEY_FILE`、`NETEASE_DEVICE_FILE` 配置应用 ID、
+RSA 私钥文件和设备 JSON 文件。设备字段必须按应用接入资料填写，完整必填字段和签名、
+认证、资源 ID 契约见[官方 API 接入依据](netease-official-api.md)。
+
+```sh
+uv run music-tui --source netease
+```
+
+官方后端将匿名令牌和扫码后的用户令牌分开管理，并在完成扫码后验证用户资料。
+当前不实现令牌刷新；令牌过期后重新扫码。官方凭证单独存放于
+`~/.local/share/music-tui/netease-official/`，凭证文件权限为 `0600`。
+官方资源 ID 保留接口返回的字符串，不转换成 Enhanced 的数字 ID。
+
+没有官方应用凭证时，可显式使用 **NeteaseCloudMusicApiEnhanced 4.41.1**：
+
+```sh
+uv run music-tui --source netease --netease-backend enhanced
+```
+
+两个后端不共享凭证或资源 ID。官方配置、网络、权限或接口失败均直接报告错误，
+不会静默切换后端。官方真实扫码和会员播放需获批应用凭证验证。
+
+## Enhanced 接入依据
+
+Enhanced 后端通过 `httpx.AsyncClient` 调用本机服务，不另行实现其加密协议。
+接口兼容性取决于服务版本。以下服务配置和接口表仅适用于 Enhanced。
 
 调研时，原 `mos9527/pyncm` 仓库、`greats3an/pyncm` 仓库和
 [PyPI pyncm 元数据](https://pypi.org/pypi/pyncm/json)均返回 404。
@@ -76,9 +100,9 @@ Python 同时发送 `unblock="false"`，避免模块级解锁。
 
 扫码后的账号验证和会员播放需要真实账号，本次离线测试不能证明这些线上权限。
 
-## 本次验证
+## Enhanced 历史验证
 
-完整测试 53 项通过，包括两个平台的登录界面、网易云 HTTP 模拟、QQ 回归和真实 mpv。
+接入 Enhanced 时完整测试 53 项通过，包括两个平台的登录界面、网易云 HTTP 模拟、QQ 回归和真实 mpv。
 Black、Ruff 及模块/函数 docstring 检查通过。
 使用 Enhanced 4.41.1 本机服务实测了匿名搜索（30 条结果及总数）、PNG 二维码获取、
 热歌榜分页（首 100 首、总计 200 首）。匿名歌曲接口返回的试听音源被正确排除。

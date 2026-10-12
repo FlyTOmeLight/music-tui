@@ -5,6 +5,8 @@ description = "A terminal music player for QQ Music and NetEase Cloud Music"
 requires-python = ">=3.13"
 license = "GPL-3.0-or-later"
 dependencies = [
+  "cryptography>=50,<51",
+  "qrcode[pil]>=8,<9",
   "httpx>=0.28,<0.29",
   "qqmusic-api-python==0.7.3",
   "textual>=6,<7",

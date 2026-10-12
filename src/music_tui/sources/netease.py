@@ -38,7 +38,7 @@ def _track(song: dict) -> Track:
 class NetEaseMusic:
     """Keep account cookies and library access separate from the interface."""
 
-    display_name = "网易云音乐"
+    display_name = "网易云音乐（Enhanced）"
 
     def __init__(self, directory: Path, api_url: str = "http://127.0.0.1:3000"):
         """Use a service with ENABLE_GENERAL_UNBLOCK explicitly disabled."""

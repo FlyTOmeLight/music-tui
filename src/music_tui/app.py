@@ -853,15 +853,29 @@ class MusicApp(App):
         self.status(f"{self.repeat_mode.value} · 作用于正在播放的整个列表")
 
 
-async def run(source: str = "qq", netease_api_url: str = "http://127.0.0.1:3000") -> None:
+async def run(
+    source: str = "qq",
+    netease_api_url: str = "http://127.0.0.1:3000",
+    netease_backend: str = "official",
+) -> None:
     """Run the selected music source with mpv and close both resources on exit."""
     data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
-    if source == "netease":
+    music: MusicSource
+    if source == "netease" and netease_backend == "official":
+        from .sources.netease_official import OfficialNetEaseMusic
+
+        private_key_file = os.environ.get("NETEASE_PRIVATE_KEY_FILE")
+        device_file = os.environ.get("NETEASE_DEVICE_FILE")
+        music = OfficialNetEaseMusic(
+            data_home / "music-tui" / "netease-official",
+            app_id=os.environ.get("NETEASE_APP_ID", ""),
+            private_key_path=Path(private_key_file) if private_key_file else None,
+            device_file=Path(device_file) if device_file else None,
+        )
+    elif source == "netease":
         from .sources.netease import NetEaseMusic
 
-        music: MusicSource = NetEaseMusic(
-            data_home / "music-tui" / "netease", api_url=netease_api_url
-        )
+        music = NetEaseMusic(data_home / "music-tui" / "netease", api_url=netease_api_url)
     else:
         music = QQMusic(data_home / "qqmusic-tui")
     player = Player()
@@ -877,12 +891,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="A terminal player for QQ and NetEase Music.")
     parser.add_argument("--source", choices=("qq", "netease"), default="qq", help="Music platform")
     parser.add_argument(
+        "--netease-backend",
+        choices=("official", "enhanced"),
+        default="official",
+        help="NetEase API backend (default: official)",
+    )
+    parser.add_argument(
         "--netease-api-url",
         default="http://127.0.0.1:3000",
-        help="NetEaseCloudMusicApi service URL",
+        help="NeteaseCloudMusicApiEnhanced service URL (enhanced backend only)",
     )
     arguments = parser.parse_args()
-    asyncio.run(run(arguments.source, arguments.netease_api_url))
+    try:
+        asyncio.run(run(arguments.source, arguments.netease_api_url, arguments.netease_backend))
+    except ValueError as error:
+        parser.error(str(error))
 
 
 if __name__ == "__main__":
