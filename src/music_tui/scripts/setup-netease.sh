@@ -229,16 +229,13 @@ existing_key=$("$PYTHON" -m music_tui.netease_setup defaults "$TASK_WORK_DIR" pr
 if [[ -n "$existing_key" ]]; then
   note "已有私钥，直接回车可保留；输入新私钥或文件路径可替换。"
 else
-  note "粘贴平台的一行 Base64 私钥，或输入已有 PEM 文件路径。输入不回显。"
+  note "支持长 Base64、多行 PEM 或已有私钥文件路径。内容隐藏；粘贴后按 Enter。"
 fi
-ask_secret SETUP_PRIVATE_KEY "私钥或 PEM 文件路径："
-while [[ -z "$SETUP_PRIVATE_KEY" && -z "$existing_key" ]]; do
-  ask_secret SETUP_PRIVATE_KEY "私钥必填："
-done
-export SETUP_APP_ID SETUP_PRIVATE_KEY
+export SETUP_APP_ID
+"$PYTHON" -m music_tui.netease_setup read-private-key "$TASK_WORK_DIR"
 until "$PYTHON" -m music_tui.netease_setup check-credentials "$TASK_WORK_DIR"; do
-  ask_secret SETUP_PRIVATE_KEY "请重新输入有效的私钥或 PEM 文件路径："
-  export SETUP_PRIVATE_KEY
+  note "请重新输入有效私钥或文件路径。"
+  "$PYTHON" -m music_tui.netease_setup read-private-key "$TASK_WORK_DIR"
 done
 
 stage "网易云确认的设备参数"
@@ -281,6 +278,5 @@ note "设备 ID、客户端版本、系统版本与机型自动生成；再次�
 
 stage "校验并保存配置"
 "$PYTHON" -m music_tui.netease_setup save "$TASK_WORK_DIR"
-unset SETUP_PRIVATE_KEY
 say "配置已完成。运行 music-tui，按 F2 选择网易云官方，再按 L 扫码登录。"
 say "无需 export，也不修改 shell 配置。环境中的 NETEASE_* 仍可覆盖已保存的配置。"

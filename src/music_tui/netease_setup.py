@@ -154,7 +154,10 @@ def check_credentials(target: Path) -> tuple[str, bytes]:
     app_id = os.environ.get("SETUP_APP_ID", default_value(target, "appId")).strip()
     if not app_id:
         raise ValueError("必须填写应用 ID（appId）")
-    value = os.environ.get("SETUP_PRIVATE_KEY", "").strip()
+    input_file = target / "private-key-input"
+    value = (
+        input_file.read_text() if input_file.exists() else os.environ.get("SETUP_PRIVATE_KEY", "")
+    ).strip()
     candidate = value or default_value(target, "privateKeyFile")
     key_bytes = value.encode()
     try:
@@ -244,7 +247,10 @@ def save(target: Path) -> Path:
 def main() -> None:
     """Run the narrow prepare, defaults, and save operations used by the setup wizard."""
     parser = argparse.ArgumentParser(description="网易云配置向导的本地支撑命令")
-    parser.add_argument("operation", choices=("prepare", "defaults", "check-credentials", "save"))
+    parser.add_argument(
+        "operation",
+        choices=("prepare", "defaults", "read-private-key", "check-credentials", "save"),
+    )
     parser.add_argument("target", type=Path)
     parser.add_argument("field", nargs="?")
     arguments = parser.parse_args()
@@ -253,11 +259,17 @@ def main() -> None:
             prepare(arguments.target)
         elif arguments.operation == "defaults":
             print(default_value(arguments.target, arguments.field))
+        elif arguments.operation == "read-private-key":
+            from .netease_key_input import read_private_key
+
+            _write_private(arguments.target / "private-key-input", read_private_key().encode())
         elif arguments.operation == "check-credentials":
             check_credentials(arguments.target)
         else:
             print(save(arguments.target))
-    except (ValueError, OSError) as error:
+    except KeyboardInterrupt:
+        parser.exit(130, "已取消私钥输入。\n")
+    except (ValueError, OSError, EOFError) as error:
         parser.exit(1, f"{error}\n")
 
 

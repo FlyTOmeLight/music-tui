@@ -196,3 +196,23 @@ def test_missing_automatic_model_can_be_entered(prepared, rsa_key, monkeypatch):
     saved = json.loads((directory / "netease-device.json").read_text())
     assert saved["model"] == "EnteredModel"
     assert saved["osVer"] == "EnteredVersion"
+
+
+@pytest.mark.parametrize("encoding", [serialization.Encoding.PEM, serialization.Encoding.DER])
+def test_pasted_private_key_file_is_validated_without_secret_environment(
+    prepared, rsa_key, monkeypatch, encoding
+):
+    """Validate the complete long or multiline key written by the terminal reader."""
+    target, _ = prepared
+    monkeypatch.setenv("SETUP_APP_ID", "test-app")
+    monkeypatch.delenv("SETUP_PRIVATE_KEY", raising=False)
+    content = rsa_key.private_bytes(
+        encoding, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    )
+    if encoding == serialization.Encoding.DER:
+        content = base64.b64encode(content)
+    (target / "private-key-input").write_bytes(content)
+    app_id, pem = setup.check_credentials(target)
+    restored = serialization.load_pem_private_key(pem, password=None)
+    assert app_id == "test-app"
+    assert restored.public_key().public_numbers() == rsa_key.public_key().public_numbers()
