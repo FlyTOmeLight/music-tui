@@ -45,6 +45,24 @@ class Playlist:
     dirid: int = 0
     favorite: bool = False
     song_count: int | None = None
+    editable: bool = False
+
+
+@dataclass(frozen=True)
+class LyricLine:
+    """One lyric line at a playback time in seconds, with an optional translation."""
+
+    seconds: float
+    text: str
+    translation: str = ""
+
+
+@dataclass(frozen=True)
+class Lyrics:
+    """Ordered lyrics; unsynchronized text uses zero times and synced=False."""
+
+    lines: tuple[LyricLine, ...] = ()
+    synced: bool = True
 
 
 @dataclass(frozen=True)

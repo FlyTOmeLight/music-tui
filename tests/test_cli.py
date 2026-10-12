@@ -11,7 +11,8 @@ from music_tui import app
 @pytest.mark.parametrize(
     "arguments, expected",
     [
-        ([], ("qq", None, "enhanced")),
+        ([], (None, None, "enhanced")),
+        (["--source", "qq"], ("qq", None, "enhanced")),
         (["--source", "netease"], ("netease", None, "enhanced")),
         (
             [
@@ -27,7 +28,7 @@ from music_tui import app
     ],
 )
 def test_main_selects_requested_platform(monkeypatch, arguments, expected):
-    """Default to QQ and prefer the Enhanced backend when selecting NetEase."""
+    """Leave implicit platform selection to saved state and honor explicit CLI choices."""
     selected = []
 
     async def run(source, api_url, backend):
