@@ -2,13 +2,18 @@
 
 from typing import Protocol
 
-from ..models import LoginSession, Playlist, Quality, SongPage, Track
+from ..models import LoginSession, Lyrics, Playlist, Quality, SongPage, Track
 
 
 class MusicSource(Protocol):
     """The library, account, and playback operations consumed by Music TUI."""
 
     display_name: str
+
+    @property
+    def account_id(self) -> str:
+        """Return the verified account ID, or an empty string while logged out."""
+        ...
 
     async def restore(self) -> bool:
         """Validate locally saved account state and report whether login is restored."""
@@ -28,6 +33,22 @@ class MusicSource(Protocol):
 
     async def songs(self, playlist: Playlist, page: int = 1) -> SongPage:
         """Fetch a playlist page in its original order."""
+        ...
+
+    async def lyrics(self, track: Track) -> Lyrics:
+        """Return timed or plain lyrics, or an empty value when lyrics are absent."""
+        ...
+
+    async def is_liked(self, track: Track) -> bool:
+        """Read whether the verified account likes this song."""
+        ...
+
+    async def set_liked(self, track: Track, liked: bool) -> None:
+        """Set the account's like state, raising on unsupported or failed writes."""
+        ...
+
+    async def add_to_playlist(self, track: Track, playlist: Playlist) -> None:
+        """Add one song to an editable playlist without replacing existing songs."""
         ...
 
     async def available_qualities(self, track: Track) -> list[Quality]:

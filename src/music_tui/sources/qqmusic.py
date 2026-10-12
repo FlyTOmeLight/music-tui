@@ -15,7 +15,8 @@ from qqmusic_api.models.login import QRCodeLoginEvents, QRLoginType
 from qqmusic_api.modules.login_utils import QRCodeLoginSession
 from qqmusic_api.modules.song import BaseSongFileType, SongFileInfo, SongFileType
 
-from ..models import LoginState, Playlist, Quality, SongPage, Track
+from ..models import LoginState, Lyrics, Playlist, Quality, SongPage, Track
+from .lyrics import parse_lyrics
 
 
 class AdditionalSongFileType(BaseSongFileType):
@@ -114,6 +115,11 @@ class QQMusic:
         """Report whether the client has both required login credential fields."""
         return bool(self.client.credential.musicid and self.client.credential.musickey)
 
+    @property
+    def account_id(self) -> str:
+        """Return the logged-in QQ Music account ID without exposing credentials."""
+        return str(self.client.credential.musicid) if self.logged_in else ""
+
     async def restore(self) -> bool:
         """Load saved credentials and refresh them if the server reports expiry."""
         if not self.credential_path.exists():
@@ -142,9 +148,9 @@ class QQMusic:
         async with asyncio.timeout(30):
             created = await self.client.user.get_created_songlist(self.client.credential.musicid)
             liked = next((p.songnum for p in created.playlists if p.dirid == 201), None)
-            result = [Playlist(0, "我喜欢", 201, True, liked)]
+            result = [Playlist(0, "我喜欢", 201, True, liked, editable=True)]
             result.extend(
-                Playlist(p.id, p.title, p.dirid, song_count=p.songnum)
+                Playlist(p.id, p.title, p.dirid, song_count=p.songnum, editable=True)
                 for p in created.playlists
                 if p.dirid != 201 and p.id
             )
@@ -194,6 +200,49 @@ class QQMusic:
         return SongPage(
             [track_from_song(s) for s in result.songs], bool(result.hasmore), result.total
         )
+
+    async def lyrics(self, track: Track) -> Lyrics:
+        """Let the pinned SDK decrypt original and translated LRC before parsing."""
+        async with asyncio.timeout(25):
+            result = await self.client.lyric.get_lyric(track.mid, trans=True)
+        return parse_lyrics(result.lyric, result.trans)
+
+    async def is_liked(self, track: Track) -> bool:
+        """Read all liked-song pages so songs beyond the first page are recognized."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        async with asyncio.timeout(25):
+            songs = await self.client.user.get_fav_song(
+                self.client.credential.encrypt_uin, num=100
+            ).collect_items()
+        return any(song.mid == track.mid for song in songs)
+
+    async def set_liked(self, track: Track, liked: bool) -> None:
+        """Resolve the numeric song identity and explicitly set the QQ like state."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        async with asyncio.timeout(25):
+            detail = await self.client.song.get_detail(track.mid)
+            operation = (
+                self.client.songlist.like_song if liked else self.client.songlist.unlike_song
+            )
+            success = await operation([(detail.track.id, detail.track.type)])
+        if not success:
+            raise ValueError("QQ 音乐未能更新喜欢状态，请重试")
+
+    async def add_to_playlist(self, track: Track, playlist: Playlist) -> None:
+        """Append one song to a user-created QQ playlist using its directory ID."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        if not playlist.editable:
+            raise ValueError("此歌单不可编辑，请选择自己的歌单")
+        async with asyncio.timeout(25):
+            detail = await self.client.song.get_detail(track.mid)
+            success = await self.client.songlist.add_songs(
+                playlist.dirid, [(detail.track.id, detail.track.type)], tid=int(playlist.id)
+            )
+        if not success:
+            raise ValueError("QQ 音乐未能添加歌曲，请重试")
 
     def _file_info(self, track: Track, quality: Quality) -> SongFileInfo | None:
         """Select the audio source for a quality, returning None if its variant is absent."""

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import qrcode
 
-from ..models import LoginState, Playlist, Quality, SongPage, Track
+from ..models import LoginState, Lyrics, Playlist, Quality, SongPage, Track
 from .netease_openapi import OfficialAPIError, OfficialClient
 
 API = "/openapi/music/basic"
@@ -64,6 +64,11 @@ class OfficialNetEaseMusic:
     def logged_in(self) -> bool:
         """Report login only after the user profile has been verified."""
         return self.user_id is not None
+
+    @property
+    def account_id(self) -> str:
+        """Expose the verified account ID without exposing the official token."""
+        return self.user_id or ""
 
     async def _anonymous(self) -> str:
         """Reuse a device-bound guest token for browsing and QR polling."""
@@ -174,6 +179,22 @@ class OfficialNetEaseMusic:
             for quality, field in QUALITY_FIELDS.items()
             if ((data.get(field) or {}).get("sqPrivilege") or {}).get("playFlag") is True
         ]
+
+    async def lyrics(self, track: Track) -> Lyrics:
+        """Report unavailable lyrics without switching away from the official API."""
+        raise ValueError("网易云官方模式暂不支持歌词，请使用 Enhanced 模式")
+
+    async def is_liked(self, track: Track) -> bool:
+        """Report unavailable like-state queries in the official implementation."""
+        raise ValueError("网易云官方模式暂不支持查询喜欢状态，请使用 Enhanced 模式")
+
+    async def set_liked(self, track: Track, liked: bool) -> None:
+        """Report unavailable like writes without attempting another backend."""
+        raise ValueError("网易云官方模式暂不支持修改喜欢状态，请使用 Enhanced 模式")
+
+    async def add_to_playlist(self, track: Track, playlist: Playlist) -> None:
+        """Report unavailable playlist writes without attempting another backend."""
+        raise ValueError("网易云官方模式暂不支持添加到歌单，请使用 Enhanced 模式")
 
     async def stream_url(self, track: Track, quality: Quality) -> str:
         """Resolve only full-length audio at the selected, authorized quality."""

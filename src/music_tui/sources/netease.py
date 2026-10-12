@@ -12,7 +12,8 @@ from pathlib import Path
 
 import httpx
 
-from ..models import LoginState, Playlist, Quality, SongPage, Track
+from ..models import LoginState, Lyrics, Playlist, Quality, SongPage, Track
+from .lyrics import parse_lyrics
 
 LEVELS = {
     Quality.MASTER: "jymaster",
@@ -53,6 +54,11 @@ class NetEaseMusic:
         """Report whether the server verified the current account cookies."""
         return self.user_id is not None
 
+    @property
+    def account_id(self) -> str:
+        """Return the server-verified NetEase account ID, or an empty guest ID."""
+        return str(self.user_id) if self.logged_in else ""
+
     async def _request(self, endpoint: str, *, qr: bool = False, **parameters) -> dict:
         """Send secrets in POST bodies and surface errors without response contents."""
         parameters["timestamp"] = int(time.time() * 1000)
@@ -77,6 +83,9 @@ class NetEaseMusic:
             ) from error
         if not isinstance(result, dict):
             raise ValueError("网易云 API 返回了无效响应")
+        if endpoint == "/playlist/tracks" and isinstance(result.get("body"), dict):
+            # Enhanced 4.41.1 wraps normal writes but returns duplicate retries directly.
+            result = result["body"]
         allowed = {200, 800, 801, 802, 803} if qr else {200}
         if result.get("code") not in allowed:
             raise ValueError(f"网易云请求失败（状态 {result.get('code', '未知')}）")
@@ -142,7 +151,13 @@ class NetEaseMusic:
             )
             items = result.get("playlist", [])
             playlists.extend(
-                Playlist(int(item["id"]), item["name"], song_count=item.get("trackCount"))
+                Playlist(
+                    int(item["id"]),
+                    item["name"],
+                    favorite=item.get("specialType") == 5,
+                    song_count=item.get("trackCount"),
+                    editable=str((item.get("creator") or {}).get("userId")) == self.account_id,
+                )
                 for item in items
             )
             if not result.get("more") or not items:
@@ -182,6 +197,37 @@ class NetEaseMusic:
             offset + 100 < len(ids),
             len(ids),
         )
+
+    async def lyrics(self, track: Track) -> Lyrics:
+        """Fetch line-timed lyrics and their optional translated counterpart."""
+        result = await self._request("/lyric", id=track.mid)
+        return parse_lyrics(
+            (result.get("lrc") or {}).get("lyric", ""),
+            (result.get("tlyric") or {}).get("lyric", ""),
+        )
+
+    async def is_liked(self, track: Track) -> bool:
+        """Read the verified account's complete liked-song ID list."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        result = await self._request("/likelist", uid=self.user_id)
+        return track.mid in {str(song_id) for song_id in result.get("ids", [])}
+
+    async def set_liked(self, track: Track, liked: bool) -> None:
+        """Set the like state using Enhanced's string-valued boolean parameter."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        await self._request("/like", id=track.mid, like="true" if liked else "false")
+        self._playlist_ids.clear()
+
+    async def add_to_playlist(self, track: Track, playlist: Playlist) -> None:
+        """Append to an owned playlist and invalidate its cached song ordering."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        if not playlist.editable:
+            raise ValueError("此歌单不可编辑，请选择自己的歌单")
+        await self._request("/playlist/tracks", op="add", pid=playlist.id, tracks=track.mid)
+        self._playlist_ids.pop(playlist.id, None)
 
     async def _audio(self, track: Track, quality: Quality) -> dict | None:
         """Reject missing, downgraded, or preview-only stream responses."""
