@@ -235,6 +235,51 @@ async def test_qr_fits_small_terminal_and_success_loads_library(display_name):
         assert app.tracks == [THIRD]
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "无法连接网易云 API 服务。\n请另开终端运行：\n"
+        "uv run music-tui --netease-service\n服务启动后按 R 重试。",
+        "无法访问网易云 API，请另开终端运行 uv run music-tui --netease-service，"
+        "保持服务运行后按 R 重试。",
+    ],
+)
+async def test_login_connection_error_shows_full_command_in_small_terminal(message):
+    """Show wrapped connection guidance and preserve refresh controls at 80×24."""
+
+    class UnavailableLibrary(Library):
+        display_name = "网易云音乐（Enhanced）"
+        attempts = 0
+
+        def login_session(self):
+            """Provide a failed QR request and count refreshed login attempts."""
+            self.attempts += 1
+
+            async def get_qrcode():
+                """Report service startup instructions without returning a QR image."""
+                raise ValueError(message)
+
+            return SimpleNamespace(get_qrcode=get_qrcode)
+
+    music = UnavailableLibrary()
+    app = MusicApp(music, Audio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("l")
+        await pilot.pause()
+        status = app.screen.query_one("#login-state", Static)
+        assert status.region.height >= max(2, len(message.splitlines()))
+        assert status.region.y >= 0 and status.region.bottom <= 23
+        lines = [status.render_line(row).text for row in range(status.region.height)]
+        assert "".join(message.split()) in "".join("".join(lines).split())
+        keys = app.screen.query_one("#login-keys").region
+        assert keys.y >= status.region.bottom and keys.bottom <= 24
+        await pilot.press("r")
+        await pilot.pause()
+        assert music.attempts == 2
+        await pilot.press("escape")
+        assert not isinstance(app.screen, LoginScreen)
+
+
 @pytest.mark.parametrize("state", [LoginState.EXPIRED, LoginState.REFUSED])
 async def test_netease_expired_or_refused_login_can_be_refreshed(state):
     """Keep unsuccessful NetEase login visible without treating it as a saved account."""

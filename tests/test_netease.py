@@ -330,3 +330,22 @@ async def test_qr_login_does_not_persist_missing_or_unverified_credentials(
         _ = [state async for state in session]
     assert not music.logged_in and not music.credential_path.exists()
     await music.close()
+
+
+async def test_connection_error_explains_how_to_start_service_without_secret_details(make_music):
+    """Offer complete startup guidance without reflecting request URLs or account cookies."""
+
+    def handler(request):
+        """Simulate a missing local listener with sensitive error text."""
+        raise httpx.ConnectError("sensitive-token", request=request)
+
+    music = make_music(handler)
+    try:
+        with pytest.raises(ValueError) as caught:
+            await music.login_session().get_qrcode()
+        message = str(caught.value)
+        assert "uv run music-tui --netease-service" in message
+        assert "按 R" in message
+        assert "sensitive-token" not in message
+    finally:
+        await music.close()

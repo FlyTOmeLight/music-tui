@@ -61,9 +61,16 @@ class NetEaseMusic:
             response = await self.client.post(endpoint, json=parameters)
             response.raise_for_status()
             result = response.json()
+        except httpx.ConnectError as error:
+            raise ValueError(
+                "无法连接网易云 API 服务。\n"
+                "请另开终端运行：\n"
+                "uv run music-tui --netease-service\n"
+                "服务启动后按 R 重试。"
+            ) from error
         except (httpx.HTTPError, ValueError) as error:
             raise ValueError(
-                "无法访问网易云 API，请运行 music-tui --netease-service，或检查已配置的服务地址"
+                "网易云 API 请求失败。\n" "请检查服务终端和已配置的服务地址，按 R 重试。"
             ) from error
         if not isinstance(result, dict):
             raise ValueError("网易云 API 返回了无效响应")

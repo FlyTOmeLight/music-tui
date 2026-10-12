@@ -51,6 +51,7 @@ class LoginScreen(ModalScreen[bool]):
     #login-box { width: 58; max-width: 100%; height: auto; max-height: 100%; align: center middle; }
     #login-title, #login-state, #login-keys { width: 100%; height: 1; text-align: center; }
     #login-title { color: #58d6a0; text-style: bold; }
+    #login-state { height: auto; }
     #qr-frame { width: 100%; height: auto; }
     #qr { width: auto; height: auto; color: black; background: white; }
     #login-keys { color: $text-muted; }
