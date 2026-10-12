@@ -349,3 +349,49 @@ async def test_connection_error_explains_how_to_start_service_without_secret_det
         assert "sensitive-token" not in message
     finally:
         await music.close()
+
+
+async def test_qr_poll_reads_scan_changes_despite_service_url_cache(make_music):
+    """Bypass Enhanced's URL-only cache so a waiting QR can advance to confirmation."""
+    upstream = iter([801, 802, 803])
+    cache = {}
+
+    def handler(request):
+        """Model the pinned service middleware, which ignores POST body timestamps."""
+        cache_key = (str(request.url), request.headers.get("cookie", ""))
+        if request.headers.get("x-apicache-force-fetch"):
+            return response({"code": next(upstream)})
+        if cache_key not in cache:
+            cache[cache_key] = {"code": next(upstream)}
+        return response(cache[cache_key])
+
+    music = make_music(handler)
+    try:
+        statuses = [
+            (await music._request("/login/qr/check", qr=True, key="dummy"))["code"]
+            for _ in range(3)
+        ]
+        assert statuses == [801, 802, 803]
+    finally:
+        await music.close()
+
+
+async def test_search_does_not_reuse_a_different_post_body(make_music, monkeypatch):
+    """Search distinct keywords independently even when their URL and timestamp match."""
+    cache = {}
+    monkeypatch.setattr("music_tui.sources.netease.time.time", lambda: 1000)
+
+    def handler(request):
+        """Apply the same URL cache while returning query-specific search results."""
+        keyword = json.loads(request.content)["keywords"]
+        payload = {"code": 200, "result": {"songs": [song(keyword)], "songCount": 1}}
+        if request.headers.get("x-apicache-force-fetch"):
+            return response(payload)
+        return response(cache.setdefault(str(request.url), payload))
+
+    music = make_music(handler)
+    try:
+        assert (await music.search("first")).tracks[0].mid == "first"
+        assert (await music.search("second")).tracks[0].mid == "second"
+    finally:
+        await music.close()

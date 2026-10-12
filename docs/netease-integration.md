@@ -74,7 +74,9 @@ Python 同时发送 `unblock="false"`，避免模块级解锁。
 
 ## 请求与响应契约
 
-下列接口均使用 POST JSON。每次请求带毫秒 `timestamp`，避免登录状态缓存。
+下列接口均使用 POST JSON。每次请求带毫秒 `timestamp`。客户端另发送 `x-apicache-force-fetch: true`，
+强制绕过 Enhanced 的两分钟 URL 缓存。该缓存忽略 POST 请求体，
+仅改变请求体中的时间戳无法刷新扫码状态，也可能混用不同搜索或账号的响应。
 `cookie` 放在请求体中，不放入 URL。服务地址优先读取命令行覆盖项，再读取向导配置；未配置时为 `http://127.0.0.1:3000`。
 客户端设置 25 秒超时、`trust_env=False`，不读取环境代理。
 错误提示只包含业务状态码，不展示响应正文或 Cookie。

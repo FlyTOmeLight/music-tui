@@ -58,7 +58,10 @@ class NetEaseMusic:
         parameters["timestamp"] = int(time.time() * 1000)
         parameters["cookie"] = self.cookie
         try:
-            response = await self.client.post(endpoint, json=parameters)
+            # Enhanced caches by URL and HTTP cookies, ignoring the POST body.
+            response = await self.client.post(
+                endpoint, json=parameters, headers={"x-apicache-force-fetch": "true"}
+            )
             response.raise_for_status()
             result = response.json()
         except httpx.ConnectError as error:
