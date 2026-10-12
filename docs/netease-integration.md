@@ -103,7 +103,9 @@ Python 同时发送 `unblock="false"`，避免模块级解锁。
 
 先获取 key，再获取二维码图片。每两秒轮询，最多三分钟。
 状态 `800` 表示过期，`801` 等待扫码，`802` 等待确认，`803` 登录成功。
-成功后解析 Cookie，要求存在 `MUSIC_U`，再调用账号接口验证。
+成功后优先读取本次响应的 `Set-Cookie`，不使用 HTTP 客户端中的历史凭据。
+仅返回 JSON Cookie 时，先清理拼接产生的空分号片段，再用标准库解析。
+要求存在非空 `MUSIC_U`，再调用账号接口验证。
 验证后以原子替换方式保存 `netease-credential.json`，权限 `0600`。
 恢复登录同样验证账号，不信任文件中的用户 ID。
 [二维码模块](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced/blob/main/module/login_qr_check.js)。

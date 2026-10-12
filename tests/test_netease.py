@@ -395,3 +395,62 @@ async def test_search_does_not_reuse_a_different_post_body(make_music, monkeypat
         assert (await music.search("second")).tracks[0].mid == "second"
     finally:
         await music.close()
+
+
+@pytest.mark.parametrize("headers", [False, True])
+async def test_qr_login_reads_joined_set_cookie_credentials(make_music, headers):
+    """Accept real service Set-Cookie attributes and empty separators before MUSIC_U."""
+    issued = [
+        "NMTID=dummy; Path=/; HttpOnly;",
+        "MUSIC_U=fresh; Path=/; Expires=Wed, 01 Jan 2031 00:00:00 GMT; HttpOnly;",
+        "__csrf=token; Path=/;",
+    ]
+
+    def handler(request):
+        """Return Enhanced's joined JSON cookies and optionally its structured HTTP headers."""
+        if request.url.path == "/login/qr/key":
+            return response({"code": 200, "data": {"unikey": "dummy"}})
+        if request.url.path == "/login/qr/create":
+            return response({"code": 200, "data": {"qrimg": "data:image/png;base64,iVBORw0KGgo="}})
+        if request.url.path == "/login/qr/check":
+            return httpx.Response(
+                200,
+                json={"code": 803, "cookie": ";".join(issued)},
+                headers=[("Set-Cookie", value) for value in issued] if headers else [],
+            )
+        assert request.url.path == "/user/account"
+        sent = json.loads(request.content)["cookie"]
+        assert "MUSIC_U=fresh" in sent
+        assert "__csrf=token" in sent
+        assert all(attribute not in sent for attribute in ("Path", "HttpOnly", "Expires"))
+        return response({"code": 200, "account": {"id": 7}})
+
+    music = make_music(handler)
+    try:
+        session = music.login_session()
+        await session.get_qrcode()
+        assert [state async for state in session] == [LoginState.DONE]
+        saved = json.loads(music.credential_path.read_text())["cookie"]
+        assert "MUSIC_U=fresh" in saved
+        assert "Path" not in saved and "Expires" not in saved
+    finally:
+        await music.close()
+
+
+async def test_qr_success_without_new_credentials_does_not_reuse_cookie_jar(make_music):
+    """Reject an incomplete QR success even when the HTTP client holds an older account."""
+
+    def handler(request):
+        """Return no new account credentials for this login attempt."""
+        return response({"code": 803, "cookie": "NMTID=dummy"})
+
+    music = make_music(handler)
+    music.client.cookies.set("MUSIC_U", "old-account")
+    session = music.login_session()
+    session.key = "dummy"
+    try:
+        with pytest.raises(ValueError, match="缺少账号凭据"):
+            _ = [state async for state in session]
+        assert not music.logged_in and not music.credential_path.exists()
+    finally:
+        await music.close()

@@ -80,6 +80,15 @@ class NetEaseMusic:
         allowed = {200, 800, 801, 802, 803} if qr else {200}
         if result.get("code") not in allowed:
             raise ValueError(f"网易云请求失败（状态 {result.get('code', '未知')}）")
+        if qr and result["code"] == 803:
+            issued = SimpleCookie()
+            for cookie in response.cookies.jar:
+                issued[cookie.name] = cookie.value
+            if "MUSIC_U" in issued:
+                # Use only this response's credentials, never the client's older account jar.
+                result["cookie"] = "; ".join(
+                    f"{name}={item.coded_value}" for name, item in issued.items()
+                )
         return result
 
     async def _account(self) -> None:
@@ -245,11 +254,18 @@ class NetEaseLoginSession:
                 yield LoginState.CONFIRMED
             elif code == 803:
                 cookies = SimpleCookie()
-                cookies.load(result.get("cookie", ""))
-                if "MUSIC_U" not in cookies:
+                raw_cookie = result.get("cookie", "")
+                if not isinstance(raw_cookie, str):
+                    raise ValueError("网易云登录响应缺少账号凭据")
+                # Enhanced joins Set-Cookie strings; trailing delimiters can create empty parts.
+                normalized = "; ".join(
+                    part.strip() for part in raw_cookie.split(";") if part.strip()
+                )
+                cookies.load(normalized)
+                if "MUSIC_U" not in cookies or not cookies["MUSIC_U"].value:
                     raise ValueError("网易云登录响应缺少账号凭据")
                 self.music.cookie = "; ".join(
-                    f"{name}={item.value}" for name, item in cookies.items()
+                    f"{name}={item.coded_value}" for name, item in cookies.items()
                 )
                 await self.music._account()
                 self.music._save_cookie()
