@@ -1,6 +1,7 @@
 """Verify Enhanced setup without installing packages or touching account data."""
 
 import json
+import plistlib
 import subprocess
 from unittest.mock import MagicMock
 
@@ -16,6 +17,12 @@ def environment(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.delenv("NETEASE_API_URL", raising=False)
     monkeypatch.setattr(setup, "_node_status", lambda: (True, "Node.js 和 npx 已就绪。"))
+    monkeypatch.setattr(setup.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        setup,
+        "_launchctl",
+        lambda *args: subprocess.CompletedProcess(args, 113 if args[0] == "print" else 0),
+    )
     return tmp_path
 
 
@@ -150,39 +157,96 @@ def test_save_local_requires_node(environment, monkeypatch):
 
 
 def test_run_service_pins_package_and_safety_settings(environment, monkeypatch):
-    """Run a foreground child with the saved port and disabled unblock/proxy features."""
+    """Register a restarting launchd job and return once the API is ready."""
     monkeypatch.setattr(setup, "load_enhanced_config", lambda: {"apiUrl": "http://127.0.0.1:4567"})
     monkeypatch.setattr(setup, "_port_available", lambda port: True)
+    monkeypatch.setattr(setup, "_is_enhanced", lambda url: True)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: "/opt/node/bin/" + name)
     calls = []
 
-    def run(command, **options):
-        """Record the service command without starting Node.js."""
-        calls.append((command, options))
-        return subprocess.CompletedProcess(command, 0)
+    def launchctl(*command):
+        """Record native registration without modifying the desktop session."""
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 113 if command[0] == "print" else 0)
 
-    monkeypatch.setattr(setup.subprocess, "run", run)
+    monkeypatch.setattr(setup, "_launchctl", launchctl)
     assert setup.run_service() == 0
-    command, options = calls[0]
-    assert command == ["npx", "--yes", "@neteasecloudmusicapienhanced/api@4.41.1"]
-    assert options["env"]["PORT"] == "4567"
-    assert options["env"]["HOST"] == "127.0.0.1"
-    assert options["env"]["ENABLE_GENERAL_UNBLOCK"] == "false"
-    assert options["env"]["ENABLE_PROXY"] == "false"
+    path = setup.config_directory() / "enhanced-service.plist"
+    job = plistlib.loads(path.read_bytes())
+    assert calls[-1] == ("bootstrap", f"gui/{setup.os.getuid()}", str(path.resolve()))
+    assert job["ProgramArguments"] == [
+        "/opt/node/bin/npx",
+        "--yes",
+        "@neteasecloudmusicapienhanced/api@4.41.1",
+    ]
+    assert job["KeepAlive"] is True
+    assert job["ThrottleInterval"] == 5
+    assert job["Umask"] == 0o077
+    assert job["EnvironmentVariables"]["PORT"] == "4567"
+    assert job["EnvironmentVariables"]["HOST"] == "127.0.0.1"
+    assert job["EnvironmentVariables"]["ENABLE_GENERAL_UNBLOCK"] == "false"
+    assert job["EnvironmentVariables"]["ENABLE_PROXY"] == "false"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert (path.parent / "enhanced-service.log").stat().st_mode & 0o777 == 0o600
 
 
-@pytest.mark.parametrize("enhanced, expected", [(True, 0), (False, 1)])
-def test_occupied_port_never_starts_child(environment, monkeypatch, enhanced, expected):
-    """Reuse Enhanced or report another listener without launching or stopping processes."""
+@pytest.mark.parametrize("enhanced", [True, False])
+def test_occupied_port_never_starts_child(environment, monkeypatch, enhanced):
+    """Reject unmanaged listeners without silently claiming they are supervised."""
     monkeypatch.setattr(setup, "load_enhanced_config", lambda: {"apiUrl": "http://127.0.0.1:4567"})
     monkeypatch.setattr(setup, "_port_available", lambda port: False)
     monkeypatch.setattr(setup, "_is_enhanced", lambda url: enhanced)
+    monkeypatch.setattr(setup, "_write_service", lambda port: pytest.fail("occupied port"))
+    assert setup.run_service() == 1
 
-    def forbidden(*args, **kwargs):
-        """Fail if an occupied port triggers process execution."""
-        pytest.fail("A service process must not be started")
 
-    monkeypatch.setattr(setup.subprocess, "run", forbidden)
-    assert setup.run_service() == expected
+def test_repeat_start_does_not_register_second_job(environment, monkeypatch):
+    """Reuse a healthy managed job without touching its process or configuration."""
+    monkeypatch.setattr(setup, "_launchctl", lambda *args: subprocess.CompletedProcess(args, 0))
+    monkeypatch.setattr(setup, "_is_enhanced", lambda url: True)
+    monkeypatch.setattr(setup, "_write_service", lambda port: pytest.fail("duplicate registration"))
+    assert setup.run_service() == 0
+
+
+@pytest.mark.parametrize("loaded", [True, False])
+def test_stop_unregisters_only_managed_job(environment, monkeypatch, loaded):
+    """Remove launchd ownership before stopping so the child will not restart."""
+    calls = []
+
+    def launchctl(*args):
+        """Simulate a present or absent service and record native control calls."""
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 113 if args[0] == "print" and not loaded else 0)
+
+    monkeypatch.setattr(setup, "_launchctl", launchctl)
+    assert setup.run_service("stop") == 0
+    assert [call[0] for call in calls] == (["print", "bootout"] if loaded else ["print"])
+
+
+@pytest.mark.parametrize("healthy", [True, False])
+def test_status_distinguishes_registration_and_api_readiness(environment, monkeypatch, healthy):
+    """Report API readiness separately from the registered restart policy."""
+    monkeypatch.setattr(setup, "_launchctl", lambda *args: subprocess.CompletedProcess(args, 0))
+    monkeypatch.setattr(setup, "_is_enhanced", lambda url: healthy)
+    assert setup.run_service("status") == (0 if healthy else 1)
+
+
+def test_unready_service_reports_log_without_claiming_success(environment, monkeypatch, capsys):
+    """Keep a slow-starting job registered but report that the API is not ready."""
+    monkeypatch.setattr(setup, "_launchctl", lambda *args: subprocess.CompletedProcess(args, 0))
+    monkeypatch.setattr(setup, "_is_enhanced", lambda url: False)
+    clock = iter([0, 31])
+    monkeypatch.setattr(setup.time, "monotonic", lambda: next(clock))
+    assert setup.run_service() == 1
+    assert "尚未就绪" in capsys.readouterr().err
+
+
+def test_registration_failure_is_reported(environment, monkeypatch, capsys):
+    """Do not wait for an API after launchd rejects job registration."""
+    monkeypatch.setattr(setup, "_port_available", lambda port: True)
+    monkeypatch.setattr(setup, "_launchctl", lambda *args: subprocess.CompletedProcess(args, 1))
+    assert setup.run_service() == 1
+    assert "注册网易云后台服务失败" in capsys.readouterr().err
 
 
 def test_remote_service_cannot_be_started_locally(environment, monkeypatch):

@@ -25,21 +25,34 @@ macOS 可使用 `brew install node`。向导不修改其他正在运行的服务
 
 ## 2. 启动本机 API 服务
 
-在终端 A 运行：
+macOS 在项目目录运行：
 
 ```sh
 uv run music-tui --netease-service
 ```
 
-保持该终端运行。首次启动会通过 npx 下载固定版本
+命令将服务交给 launchd 在后台运行，启动后返回当前终端。
+关闭终端不会停止服务，服务异常退出后会自动重启；重复执行启动命令不会创建多个服务。
+服务仅在当前登录会话运行，注销或重启电脑后需重新启动，不会安装登录自动启动项。
+首次启动会通过 npx 下载固定版本
 `@neteasecloudmusicapienhanced/api@4.41.1`，需要联网。
 服务绑定 `127.0.0.1` 和向导选择的端口，并自动设置
 `ENABLE_GENERAL_UNBLOCK=false`、`ENABLE_PROXY=false`。
-按 `Ctrl+C` 可停止服务。使用已有服务时跳过这一步。
+查看状态或主动停止服务：
+
+```sh
+uv run music-tui --netease-service-status
+uv run music-tui --netease-service-stop
+```
+
+服务日志保存在 `~/.config/music-tui/enhanced-service.log`；设置 `XDG_CONFIG_HOME`
+时使用 `$XDG_CONFIG_HOME/music-tui/enhanced-service.log`。
+其他操作系统执行守护命令会提示不支持，可使用下文的 npx 命令手动运行。
+使用已有服务时跳过这一步。
 
 ## 3. 启动播放器并扫码
 
-在终端 B 运行：
+随后在同一终端运行：
 
 ```sh
 uv run music-tui
@@ -65,6 +78,9 @@ HOST=127.0.0.1 PORT=3000 ENABLE_GENERAL_UNBLOCK=false ENABLE_PROXY=false \
   npx --yes @neteasecloudmusicapienhanced/api@4.41.1
 ```
 
+将 `PORT` 改为配置的端口。手动启动时需保持该终端运行，并在另一个终端启动播放器；
+按 `Ctrl+C` 停止手动服务。
+
 临时使用其他地址时，运行：
 
 ```sh
@@ -74,7 +90,7 @@ uv run music-tui --source netease --netease-api-url http://127.0.0.1:3000
 | 提示 | 处理方式 |
 | --- | --- |
 | Node.js 或 npx 不可用 | 安装 Node.js 22+，重新打开终端后运行向导。 |
-| 服务无法连接 | 检查终端 A 中服务仍在运行；已有服务检查地址和端口。 |
+| 服务无法连接 | macOS 运行 `--netease-service-status` 并检查服务日志，未启动时运行 `--netease-service`；手动或已有服务检查进程、地址和端口。 |
 | 端口被占用 | 重新运行向导选择本机服务，使用空闲端口；不要停止无关服务。 |
 | 二维码过期 | 在登录页按 `r` 获取新二维码。 |
 | 音质不可用 | 按歌曲、账号和会员实际权限选择音质。 |
