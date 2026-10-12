@@ -1,1 +1,1 @@
-"""Terminal music player with QQ Music support."""
+"""Terminal music player for QQ Music and NetEase Cloud Music."""

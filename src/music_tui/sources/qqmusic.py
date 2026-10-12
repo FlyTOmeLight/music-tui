@@ -3,8 +3,7 @@
 import asyncio
 import os
 import tempfile
-from dataclasses import dataclass
-from enum import Enum
+from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urljoin
@@ -12,70 +11,70 @@ from urllib.request import Request, urlopen
 
 from qqmusic_api import Client, Credential
 from qqmusic_api.models.base import Song
-from qqmusic_api.models.login import QRLoginType
+from qqmusic_api.models.login import QRCodeLoginEvents, QRLoginType
 from qqmusic_api.modules.login_utils import QRCodeLoginSession
 from qqmusic_api.modules.song import BaseSongFileType, SongFileInfo, SongFileType
+
+from ..models import LoginState, Playlist, Quality, SongPage, Track
 
 
 class AdditionalSongFileType(BaseSongFileType):
     HIRES = ("RS01", ".flac")
 
 
-class Quality(Enum):
-    MASTER = ("臻品母带", SongFileType.MASTER, 3)
-    ATMOS = ("臻品全景声", SongFileType.ATMOS_71, 24)
-    ENHANCED = ("臻品音质", SongFileType.ATMOS_2, 4)
-    HIRES = ("Hi-Res 高解析", AdditionalSongFileType.HIRES, None)
-    LOSSLESS = ("SQ 无损", SongFileType.FLAC, None)
-    HIGH = ("HQ 高品质", SongFileType.MP3_320, None)
-    STANDARD = ("标准音质", SongFileType.MP3_128, None)
-
-    def __init__(self, label: str, file_type: BaseSongFileType, variant_index: int | None):
-        """Associate a display label with its QQ audio format and source variant."""
-        self.label = label
-        self.file_type = file_type
-        self.variant_index = variant_index
+QQ_QUALITIES = {
+    Quality.MASTER: (SongFileType.MASTER, 3),
+    Quality.ATMOS: (SongFileType.ATMOS_71, 24),
+    Quality.ENHANCED: (SongFileType.ATMOS_2, 4),
+    Quality.HIRES: (AdditionalSongFileType.HIRES, None),
+    Quality.LOSSLESS: (SongFileType.FLAC, None),
+    Quality.HIGH: (SongFileType.MP3_320, None),
+    Quality.STANDARD: (SongFileType.MP3_128, None),
+}
 
 
-@dataclass(frozen=True)
-class Track:
-    mid: str
-    title: str
-    artist: str
-    seconds: int
-    media_mid: str = ""
-    song_type: int = 0
-    variants: tuple[str, ...] = ()
+def track_from_song(song: Song) -> Track:
+    """Convert QQ song metadata into a shared track with its media variants."""
+    return Track(
+        song.mid,
+        song.title or song.name,
+        " / ".join(s.name for s in song.singer),
+        song.interval,
+        song.file.media_mid,
+        song.type,
+        tuple(song.vs),
+    )
 
-    @classmethod
-    def from_song(cls, song: Song) -> "Track":
-        """Convert a QQ API song into the track fields used by the interface."""
-        return cls(
-            song.mid,
-            song.title or song.name,
-            " / ".join(s.name for s in song.singer),
-            song.interval,
-            song.file.media_mid,
-            song.type,
-            tuple(song.vs),
+
+class QQLoginSession:
+    """Translate QQ SDK QR events while keeping credentials inside the source."""
+
+    def __init__(self, music: "QQMusic"):
+        """Start an SDK login attempt owned by this account."""
+        self.music = music
+        self.session = QRCodeLoginSession(
+            music.client.login, QRLoginType.MOBILE, timeout_seconds=180
         )
 
+    async def get_qrcode(self) -> bytes:
+        """Return the SDK's QR image without exposing its response type."""
+        return (await self.session.get_qrcode()).data
 
-@dataclass(frozen=True)
-class Playlist:
-    id: int
-    title: str
-    dirid: int = 0
-    favorite: bool = False
-    song_count: int | None = None
-
-
-@dataclass(frozen=True)
-class SongPage:
-    tracks: list[Track]
-    has_more: bool
-    total: int
-    page_size: int = 100
+    async def __aiter__(self) -> AsyncIterator[LoginState]:
+        """Map events and persist confirmed QQ credentials before signalling success."""
+        async for result in self.session:
+            if result.event == QRCodeLoginEvents.CONF:
+                yield LoginState.CONFIRMED
+            elif result.event == QRCodeLoginEvents.DONE and result.credential:
+                self.music.accept_login(result.credential)
+                yield LoginState.DONE
+                return
+            elif result.event == QRCodeLoginEvents.TIMEOUT:
+                yield LoginState.EXPIRED
+                return
+            elif result.event == QRCodeLoginEvents.REFUSE:
+                yield LoginState.REFUSED
+                return
 
 
 def url_reachable(url: str) -> bool:
@@ -99,7 +98,11 @@ def save_credential(path: Path, credential: Credential) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
-class Music:
+class QQMusic:
+    """QQ Music library and account implementation."""
+
+    display_name = "QQ 音乐"
+
     def __init__(self, directory: Path):
         """Create a QQ client with account files in the supplied directory."""
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -123,9 +126,9 @@ class Music:
         self.client.credential = credential
         return self.logged_in
 
-    def login_session(self) -> QRCodeLoginSession:
+    def login_session(self) -> QQLoginSession:
         """Create a QR login session for confirmation in the mobile QQ Music app."""
-        return QRCodeLoginSession(self.client.login, QRLoginType.MOBILE, timeout_seconds=180)
+        return QQLoginSession(self)
 
     def accept_login(self, credential: Credential) -> None:
         """Persist confirmed credentials and apply them to the current client."""
@@ -166,7 +169,7 @@ class Music:
                 highlight=False,
             )
         return SongPage(
-            [Track.from_song(s) for s in result.song],
+            [track_from_song(s) for s in result.song],
             result.nextpage != -1,
             result.total_num,
             page_size=30,
@@ -189,20 +192,21 @@ class Music:
                     page=page,
                 )
         return SongPage(
-            [Track.from_song(s) for s in result.songs], bool(result.hasmore), result.total
+            [track_from_song(s) for s in result.songs], bool(result.hasmore), result.total
         )
 
     def _file_info(self, track: Track, quality: Quality) -> SongFileInfo | None:
         """Select the audio source for a quality, returning None if its variant is absent."""
+        file_type, variant_index = QQ_QUALITIES[quality]
         media_mid = track.media_mid
-        if quality.variant_index is not None:
-            index = quality.variant_index
+        if variant_index is not None:
+            index = variant_index
             if len(track.variants) <= index or not track.variants[index]:
                 return None
             media_mid = track.variants[index]
         return SongFileInfo(
             track.mid,
-            file_type=quality.file_type,
+            file_type=QQ_QUALITIES[quality][0],
             media_mid=media_mid or None,
             song_type=track.song_type,
         )
@@ -225,7 +229,7 @@ class Music:
                 )
             )
         prefixes = {info.filename[:4] for info, ok in zip(valid, reachable, strict=True) if ok}
-        return [quality for quality in Quality if quality.file_type.s in prefixes]
+        return [quality for quality in Quality if QQ_QUALITIES[quality][0].s in prefixes]
 
     async def stream_url(self, track: Track, quality: Quality) -> str:
         """Resolve the requested quality or raise a visible error without downgrading."""
@@ -235,7 +239,7 @@ class Music:
         async with asyncio.timeout(25):
             urls = await self.client.song.get_song_urls(
                 [info],
-                file_type=quality.file_type,
+                file_type=QQ_QUALITIES[quality][0],
             )
             if not urls.data or not urls.data[0].purl:
                 code = urls.data[0].result if urls.data else "空响应"

@@ -5,13 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 import qrcode
-from qqmusic_api import Credential
-from qqmusic_api.models.login import QRCodeLoginEvents
 from terminal_qrcode import SimpleImage
 from textual.widgets import DataTable, Input, ListView, Static
 
 from music_tui.app import LoginScreen, MusicApp, QualityScreen, RepeatMode
-from music_tui.music import Playlist, Quality, SongPage, Track
+from music_tui.models import LoginState, Playlist, Quality, SongPage, Track
 
 FIRST = Track("a", "第一首", "歌手 A", 60)
 SECOND = Track("b", "第二首", "歌手 B", 80)
@@ -19,6 +17,8 @@ THIRD = Track("c", "下一页", "歌手 C", 90)
 
 
 class Library:
+    display_name = "QQ 音乐"
+
     def __init__(self):
         """Track whether an unfinished login request was cancelled."""
         self.login_cancelled = False
@@ -141,9 +141,11 @@ async def test_playback_permission_failure_is_visible_and_does_not_auto_skip():
         assert "暂无播放权限" in str(app.query_one("#status", Static).render())
 
 
-async def test_escape_cancels_pending_login_and_returns_focus():
+@pytest.mark.parametrize("display_name", ["QQ 音乐", "网易云音乐"])
+async def test_escape_cancels_pending_login_and_returns_focus(display_name):
     """Verify Escape cancels QR loading and restores focus to the song table."""
     library = Library()
+    library.display_name = display_name
     app = MusicApp(library, Audio())
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.press("l")
@@ -176,25 +178,26 @@ async def test_replaced_search_cannot_overwrite_new_result():
         assert app.tracks == [SECOND]
 
 
-async def test_qr_fits_small_terminal_and_success_loads_library():
+@pytest.mark.parametrize("display_name", ["QQ 音乐", "网易云音乐"])
+async def test_qr_fits_small_terminal_and_success_loads_library(display_name):
     """Verify QR placement at 80×24 and library loading after confirmed login."""
     confirmed = asyncio.Event()
     qr = qrcode.QRCode(version=4, border=0)
     qr.add_data("https://example.com/login-test")
     qr.make(fit=False)
     data = SimpleImage.from_qr_matrix(qr.get_matrix()).resize((132, 132)).to_png_bytes()
-    credential = Credential(musicid=123, musickey="test")
 
     class Session:
         async def get_qrcode(self):
             """Return the generated QR image used by the terminal layout test."""
-            return SimpleNamespace(data=data)
+            return data
 
         async def __aiter__(self):
             """Emit confirmation and successful login after the test releases the session."""
-            yield SimpleNamespace(event=QRCodeLoginEvents.CONF)
+            yield LoginState.CONFIRMED
             await confirmed.wait()
-            yield SimpleNamespace(event=QRCodeLoginEvents.DONE, credential=credential)
+            music.saved = True
+            yield LoginState.DONE
 
     class LoginLibrary(Library):
         saved = None
@@ -203,15 +206,12 @@ async def test_qr_fits_small_terminal_and_success_loads_library():
             """Provide a controllable successful login session."""
             return Session()
 
-        def accept_login(self, value):
-            """Record the credential accepted after successful login."""
-            self.saved = value
-
         async def playlists(self):
             """Return the favorite playlist displayed after login."""
             return [Playlist(0, "我喜欢", 201, True)]
 
     music = LoginLibrary()
+    music.display_name = display_name
     app = MusicApp(music, Audio())
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.press("l")
@@ -220,13 +220,55 @@ async def test_qr_fits_small_terminal_and_success_loads_library():
         assert region.width == 41 and region.height == 21
         assert region.y >= 0 and region.bottom <= 22
         assert abs((region.x + region.width / 2) - 40) <= 1
-        assert "QQ 音乐 App 确认" in str(app.screen.query_one("#login-state", Static).render())
+        assert f"{display_name} App 确认" in str(
+            app.screen.query_one("#login-state", Static).render()
+        )
+        assert f"{display_name} App 扫码登录" in str(
+            app.screen.query_one("#login-title", Static).render()
+        )
         confirmed.set()
         await pilot.pause()
-        assert music.saved == credential
+        assert music.saved is True
+        assert display_name in str(app.query_one("#heading", Static).render())
         assert not isinstance(app.screen, LoginScreen)
         assert app.playlists[0].title == "我喜欢"
         assert app.tracks == [THIRD]
+
+
+@pytest.mark.parametrize("state", [LoginState.EXPIRED, LoginState.REFUSED])
+async def test_netease_expired_or_refused_login_can_be_refreshed(state):
+    """Keep unsuccessful NetEase login visible without treating it as a saved account."""
+    qr = qrcode.QRCode(border=0)
+    qr.add_data("https://example.com/login-test")
+    qr.make(fit=True)
+    data = SimpleImage.from_qr_matrix(qr.get_matrix()).to_png_bytes()
+
+    class Session:
+        async def get_qrcode(self):
+            """Provide a QR image for the unsuccessful login attempt."""
+            return data
+
+        async def __aiter__(self):
+            """End polling with the account's expiry or refusal state."""
+            yield state
+
+    class NetEaseLibrary(Library):
+        display_name = "网易云音乐"
+
+        def login_session(self):
+            """Create a fresh unsuccessful login attempt on each refresh."""
+            return Session()
+
+    app = MusicApp(NetEaseLibrary(), Audio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("l")
+        await pilot.pause()
+        assert isinstance(app.screen, LoginScreen)
+        assert "二维码已过期或已取消" in str(app.screen.query_one("#login-state", Static).render())
+        assert not app.account_logged_in
+        await pilot.press("r")
+        await pilot.pause()
+        assert "二维码已过期或已取消" in str(app.screen.query_one("#login-state", Static).render())
 
 
 async def test_quality_switch_preserves_position_pause_and_applies_to_next_song():

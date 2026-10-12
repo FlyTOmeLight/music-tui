@@ -4,7 +4,7 @@ import stat
 
 from qqmusic_api import Credential
 
-from music_tui.music import save_credential
+from music_tui.sources.qqmusic import save_credential
 
 
 def test_credential_roundtrip_and_private_permissions(tmp_path):

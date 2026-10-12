@@ -2,7 +2,8 @@
 
 from types import SimpleNamespace
 
-from music_tui.music import Music, Quality, Track
+from music_tui.models import Quality, Track
+from music_tui.sources.qqmusic import QQMusic
 
 
 async def test_available_quality_uses_authorized_paths_and_correct_variant(monkeypatch, tmp_path):
@@ -30,7 +31,7 @@ async def test_available_quality_uses_authorized_paths_and_correct_variant(monke
         return SimpleNamespace(sip=["https://audio.example.com/"])
 
     monkeypatch.setattr(
-        "music_tui.music.Client",
+        "music_tui.sources.qqmusic.Client",
         lambda **kwargs: SimpleNamespace(
             song=SimpleNamespace(
                 get_song_urls=get_song_urls,
@@ -39,13 +40,13 @@ async def test_available_quality_uses_authorized_paths_and_correct_variant(monke
         ),
     )
     monkeypatch.setattr(
-        "music_tui.music.url_reachable",
+        "music_tui.sources.qqmusic.url_reachable",
         lambda url: not url.endswith("missing.flac"),
     )
     variants = [""] * 25
     variants[3], variants[4], variants[24] = "master", "enhanced", "spatial"
     track = Track("song", "歌曲", "歌手", 120, "base", variants=tuple(variants))
-    music = Music(tmp_path)
+    music = QQMusic(tmp_path)
     assert await music.available_qualities(track) == [
         Quality.MASTER,
         Quality.LOSSLESS,

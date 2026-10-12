@@ -2,16 +2,17 @@
 
 ## Project Structure & Module Organization
 
-Music TUI uses distribution name `music-tui` and import package `music_tui`. QQ Music is supported; NetEase Cloud Music is planned.
+Music TUI uses distribution name `music-tui` and import package `music_tui`. QQ Music and NetEase Cloud Music are supported.
 
-Source lives in `src/music_tui/`: `app.py` owns the Textual interface and playback queue, `music.py` handles QQ Music access and credentials, and `player.py` controls mpv through a Unix socket. Tests live in `tests/`, grouped by behavior. `docs/tui-preview.png` shows the interface. `pyproject.toml` declares dependencies; `uv.lock` pins versions. Consult `docs/python-project-structure.md` when changing module boundaries.
+Source lives in `src/music_tui/`: `app.py` owns the Textual interface and playback queue, `models.py` defines shared values, `sources/qqmusic.py` and `sources/netease.py` own platform access and credentials, and `player.py` controls mpv through a Unix socket. Tests live in `tests/`, grouped by behavior. `docs/tui-preview.png` shows the interface. `pyproject.toml` declares dependencies; `uv.lock` pins versions. Consult `docs/python-project-structure.md` when changing module boundaries.
 
 ## Build, Test, and Development Commands
 
 Use Python 3.13+, uv, and mpv. On macOS: `brew install uv mpv`.
 
 - `uv sync --locked`: install locked dependencies.
-- `uv run music-tui`: start the player.
+- `uv run music-tui`: start QQ Music.
+- `uv run music-tui --source netease`: start NetEase with the local API service described in `README.md`.
 - `uv build`: build distribution archives with Hatchling.
 - `uv run black src tests`: format Python after every code change.
 - `uv run black --check src tests`: verify formatting before delivery.
@@ -35,7 +36,7 @@ Use concise, imperative commit subjects. PRs should describe resulting behavior,
 
 ## Credentials & Configuration
 
-QQ credentials remain at `~/.local/share/qqmusic-tui/credential.json`, respecting `XDG_DATA_HOME`. Preserve `0600` permissions. Keep account data out of commits and fixtures.
+QQ credentials remain at `~/.local/share/qqmusic-tui/credential.json`, respecting `XDG_DATA_HOME`. Preserve `0600` permissions. NetEase cookies live at `~/.local/share/music-tui/netease/netease-credential.json` with `0600` permissions. The NetEase API service must run with `ENABLE_GENERAL_UNBLOCK=false`. Keep account data out of commits and fixtures.
 
 ## Agent Collaboration
 

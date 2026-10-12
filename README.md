@@ -1,13 +1,13 @@
 # Music TUI
 
-一个终端音乐播放器，目前支持 QQ 音乐，后续计划支持网易云音乐。左侧歌单及歌曲总数，右侧歌曲，底部当前歌曲与播放进度。
+一个终端音乐播放器，支持 QQ 音乐和网易云音乐。左侧歌单及歌曲总数，右侧歌曲，底部当前歌曲与播放进度。
 
 ```sh
 music-tui
 ```
 
-首次使用按 `l`，用**手机 QQ 音乐 App** 扫码并确认。二维码直接显示在终端内。
-登录页适配常见的 80 列 × 24 行终端。登录成功后读取「我喜欢」、自建及收藏歌单。
+默认使用 QQ 音乐。首次使用按 `l`，用当前平台的手机 App 扫码并确认。二维码直接显示在终端内。
+登录页适配常见的 80 列 × 24 行终端。登录成功后读取当前账号的歌单。QQ 音乐包含「我喜欢」、自建及收藏歌单。
 登录凭证保存在本机，后续启动会检查并尝试刷新登录状态。
 
 | 按键 | 操作 |
@@ -44,9 +44,9 @@ music-tui
 浏览其他歌单或搜索结果不会替换正在播放的队列；再次按回车播放才会替换。
 
 播放中按 `u` 查询当前歌曲的可用音质。未播放时，查询歌曲列表中选中的歌曲。
-菜单一次请求各档授权地址，再检查音频服务器是否可以访问，只显示有有效地址的档位，
+QQ 音乐菜单一次请求各档授权地址，再检查音频服务器是否可以访问，只显示有有效地址的档位，
 并按从高到低排列。没有权限或服务器返回 404 的档位不会出现在菜单里。
-候选档位为臻品母带、臻品全景声、臻品音质、Hi-Res 高解析、SQ 无损、HQ 高品质和标准音质。
+QQ 音乐候选档位为臻品母带、臻品全景声、臻品音质、Hi-Res 高解析、SQ 无损、HQ 高品质和标准音质。
 高级档位使用对应的独立音源。
 本次运行期间，后续歌曲会使用所选音质。播放中切换会保留进度和暂停状态。
 顶部显示所选音质，底部显示当前播放音质、进度条和音量。
@@ -67,6 +67,8 @@ uv sync --locked
 uv run music-tui
 ```
 
+网易云启动方式见下一节。
+
 项目复用 [Textual](https://github.com/Textualize/textual) 处理终端输入与布局，
 [QQMusicApi](https://github.com/L-1124/QQMusicApi/tree/v0.7.3) 处理扫码、会话和音乐接口，
 [terminal-qrcode](https://pypi.org/project/terminal-qrcode/) 渲染紧凑二维码。
@@ -75,6 +77,33 @@ uv run music-tui
 
 QQ 音乐账号数据继续位于 `~/.local/share/qqmusic-tui/`，也支持 `XDG_DATA_HOME`。
 `credential.json` 的权限为 `0600`。删除它即可清除本机保存的登录状态。
+
+## 网易云音乐
+
+网易云使用本机 [NeteaseCloudMusicApiEnhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced) 服务。需要 Node.js 22+。在一个终端运行：
+
+```sh
+HOST=127.0.0.1 PORT=3000 ENABLE_GENERAL_UNBLOCK=false ENABLE_PROXY=false \
+  npx --yes @neteasecloudmusicapienhanced/api@4.41.1
+```
+
+保持该终端运行，再在项目目录的另一个终端启动：
+
+```sh
+uv run music-tui --source netease
+```
+
+按 `l` 用网易云音乐 App 扫码确认。支持账号恢复、个人歌单、搜索、分页、歌单内筛选和现有播放模式。
+如需使用自己的其他 API 地址，可传 `--netease-api-url http://127.0.0.1:4000`。
+服务必须设置 `ENABLE_GENERAL_UNBLOCK=false`；客户端使用平台返回的授权音源，不请求解锁接口。
+API 不可访问时，界面会显示服务地址或运行状态错误。
+
+网易云音质菜单只显示接口返回的完整音源，按实际音质匹配，拒绝试听地址和降级结果。
+账号权限或会员状态决定音源是否可用。切换音质继续保留进度和暂停状态。
+网易云凭据保存在 `~/.local/share/music-tui/netease/netease-credential.json`，权限为 `0600`，支持 `XDG_DATA_HOME`。
+QQ 音乐凭证仍使用原目录；两平台互不覆盖。切换平台需退出后重新运行 `--source qq` 或 `--source netease`。
+
+实现选择及接口来源见 [网易云接入说明](docs/netease-integration.md)。
 
 ## 验证
 

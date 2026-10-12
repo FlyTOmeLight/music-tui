@@ -1,10 +1,11 @@
 [project]
 name = "music-tui"
 version = "0.1.0"
-description = "A terminal music player with QQ Music support"
+description = "A terminal music player for QQ Music and NetEase Cloud Music"
 requires-python = ">=3.13"
 license = "GPL-3.0-or-later"
 dependencies = [
+  "httpx>=0.28,<0.29",
   "qqmusic-api-python==0.7.3",
   "textual>=6,<7",
   "terminal-qrcode>=1.1,<2",

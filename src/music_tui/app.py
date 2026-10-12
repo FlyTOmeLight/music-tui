@@ -1,5 +1,6 @@
-"""Keyboard-driven Music TUI with QQ Music as its current music source."""
+"""Keyboard-driven Music TUI for QQ Music and NetEase Cloud Music."""
 
+import argparse
 import asyncio
 import os
 import random
@@ -7,7 +8,6 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from qqmusic_api.models.login import QRCodeLoginEvents
 from rich.text import Text
 from terminal_qrcode import draw
 from textual import on, work
@@ -17,8 +17,10 @@ from textual.containers import Center, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Static
 
-from .music import Music, Playlist, Quality, SongPage, Track
+from .models import LoginState, Playlist, Quality, SongPage, Track
 from .player import Player
+from .sources import MusicSource
+from .sources.qqmusic import QQMusic
 
 
 def timestamp(seconds: float | None) -> str:
@@ -51,7 +53,7 @@ class LoginScreen(ModalScreen[bool]):
     #login-keys { color: $text-muted; }
     """
 
-    def __init__(self, music: Music):
+    def __init__(self, music: MusicSource):
         """Attach the music account used for QR login."""
         super().__init__()
         self.music = music
@@ -59,7 +61,7 @@ class LoginScreen(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         """Build the QR display, login status, and keyboard instructions."""
         with Vertical(id="login-box"):
-            yield Static("QQ 音乐 App 扫码登录", id="login-title")
+            yield Static(f"{self.music.display_name} App 扫码登录", id="login-title")
             with Center(id="qr-frame"):
                 yield Static("", id="qr")
             yield Static("正在获取二维码…", id="login-state", markup=False)
@@ -80,7 +82,7 @@ class LoginScreen(ModalScreen[bool]):
             async with asyncio.timeout(25):
                 qr = await session.get_qrcode()
             # Half blocks use one terminal row for two QR modules; no lossy scaling.
-            rendered = draw(qr.data, renderer="halfblock", fit=False, img_width=512).__rich__()
+            rendered = draw(qr, renderer="halfblock", fit=False, img_width=512).__rich__()
             if rendered.plain.endswith("\n"):
                 rendered = rendered[:-1]
             rendered.style = "black on white"
@@ -89,15 +91,14 @@ class LoginScreen(ModalScreen[bool]):
             if self.size.height < rows:
                 state.update(f"请将终端增高到 {rows} 行，以完整扫码")
             else:
-                state.update("请使用 QQ 音乐 App 扫码（3 分钟有效）")
+                state.update(f"请使用 {self.music.display_name} App 扫码")
             async for result in session:
-                if result.event == QRCodeLoginEvents.CONF:
-                    state.update("已扫码，请在 QQ 音乐 App 确认")
-                elif result.event == QRCodeLoginEvents.DONE and result.credential:
-                    self.music.accept_login(result.credential)
+                if result == LoginState.CONFIRMED:
+                    state.update(f"已扫码，请在 {self.music.display_name} App 确认")
+                elif result == LoginState.DONE:
                     self.dismiss(True)
                     return
-                elif result.event in (QRCodeLoginEvents.TIMEOUT, QRCodeLoginEvents.REFUSE):
+                elif result in (LoginState.EXPIRED, LoginState.REFUSED):
                     state.update("二维码已过期或已取消，按 R 重新生成")
                     return
         except Exception as error:
@@ -245,7 +246,7 @@ class MusicApp(App):
         Binding("escape", "songs", "歌曲", show=False),
     ]
 
-    def __init__(self, music: Music, player: Player):
+    def __init__(self, music: MusicSource, player: Player):
         """Initialize library, browsing, playback, and shuffle state."""
         super().__init__()
         self.music = music
@@ -281,7 +282,9 @@ class MusicApp(App):
     def compose(self) -> ComposeResult:
         """Build the search, playlist, song table, and playback interface."""
         yield Static(
-            "Music TUI · QQ 音乐   未登录   标准音质   顺序播放", id="heading", markup=False
+            f"Music TUI · {self.music.display_name}   未登录   标准音质   顺序播放",
+            id="heading",
+            markup=False,
         )
         yield Input(placeholder="/ 全站搜索歌曲或歌手，回车搜索", id="search")
         with Horizontal(id="content"):
@@ -789,7 +792,8 @@ class MusicApp(App):
         """Show account status, preferred quality, and repeat mode in the heading."""
         label = "已登录" if self.account_logged_in else "未登录"
         self.query_one("#heading", Static).update(
-            f"Music TUI · QQ 音乐   {label}   {self.quality.label}   {self.repeat_mode.value}"
+            f"Music TUI · {self.music.display_name}   {label}   "
+            f"{self.quality.label}   {self.repeat_mode.value}"
         )
 
     def reset_shuffle(self, index: int) -> None:
@@ -849,10 +853,17 @@ class MusicApp(App):
         self.status(f"{self.repeat_mode.value} · 作用于正在播放的整个列表")
 
 
-async def run() -> None:
-    """Run the interface with QQ Music and mpv, then close both resources."""
+async def run(source: str = "qq", netease_api_url: str = "http://127.0.0.1:3000") -> None:
+    """Run the selected music source with mpv and close both resources on exit."""
     data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
-    music = Music(data_home / "qqmusic-tui")
+    if source == "netease":
+        from .sources.netease import NetEaseMusic
+
+        music: MusicSource = NetEaseMusic(
+            data_home / "music-tui" / "netease", api_url=netease_api_url
+        )
+    else:
+        music = QQMusic(data_home / "qqmusic-tui")
     player = Player()
     try:
         await MusicApp(music, player).run_async()
@@ -863,7 +874,15 @@ async def run() -> None:
 
 def main() -> None:
     """Start the asynchronous application from the command-line entry point."""
-    asyncio.run(run())
+    parser = argparse.ArgumentParser(description="A terminal player for QQ and NetEase Music.")
+    parser.add_argument("--source", choices=("qq", "netease"), default="qq", help="Music platform")
+    parser.add_argument(
+        "--netease-api-url",
+        default="http://127.0.0.1:3000",
+        help="NetEaseCloudMusicApi service URL",
+    )
+    arguments = parser.parse_args()
+    asyncio.run(run(arguments.source, arguments.netease_api_url))
 
 
 if __name__ == "__main__":
