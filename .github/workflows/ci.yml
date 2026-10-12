@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - release-v*
+      - bugfix-*
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Python 3.13 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.13.0"
+          enable-cache: true
+      - name: Install mpv on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mpv
+      - name: Install mpv on macOS
+        if: runner.os == 'macOS'
+        run: brew install mpv
+      - name: Install locked dependencies
+        run: uv sync --locked --python 3.13
+      - name: Check formatting
+        run: uv run --no-sync black --check src tests
+      - name: Lint
+        run: uv run --no-sync ruff check src tests
+      - name: Test
+        run: uv run --no-sync pytest -q
+      - name: Build distributions
+        run: uv build
+      - name: Verify installed wheel outside the repository
+        run: bash scripts/check_install.sh
+      - name: Upload distributions
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error

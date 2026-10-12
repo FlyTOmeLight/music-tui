@@ -85,8 +85,8 @@ class Player:
                     future.set_exception(RuntimeError("mpv 连接已关闭"))
             self.events.put_nowait({"event": "disconnected"})
 
-    async def command(self, *arguments: Any) -> Any:
-        """Send one IPC request and await its matching response within five seconds."""
+    async def command(self, *arguments: Any, **named: Any) -> Any:
+        """Send positional or named IPC arguments and await a response within five seconds."""
         if self.writer is None or self.writer.is_closing():
             raise RuntimeError("播放器尚未就绪")
         self.request_id += 1
@@ -94,8 +94,9 @@ class Player:
         future = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
         try:
+            command = {"name": arguments[0], **named} if named else arguments
             self.writer.write(
-                (json.dumps({"command": arguments, "request_id": request_id}) + "\n").encode()
+                (json.dumps({"command": command, "request_id": request_id}) + "\n").encode()
             )
             await self.writer.drain()
             return await asyncio.wait_for(future, timeout=5)
@@ -104,7 +105,9 @@ class Player:
 
     async def load(self, url: str, *, start: float = 0, paused: bool = False) -> None:
         """Replace the current track while applying its start position and pause state."""
-        await self.command("loadfile", url, "replace", -1, {"start": str(max(0, start))})
+        await self.command(
+            "loadfile", url=url, flags="replace", options={"start": str(max(0, start))}
+        )
         self.entry_id = await self.command("get_property", "playlist/0/id")
         await self.command("set_property", "pause", paused)
 

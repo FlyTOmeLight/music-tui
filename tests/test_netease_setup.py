@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import stat
+from importlib.metadata import version
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -52,7 +53,7 @@ def test_prepare_automates_local_fields_and_limits_defaults(prepared):
     defaults = json.loads((target / "defaults.json").read_text())
     assert len(defaults["deviceId"]) == 32
     assert defaults["deviceId"].isalnum()
-    assert defaults["appVer"] == "0.1.0"
+    assert defaults["appVer"] == version("music-tui")
     assert defaults["model"] == "LocalModel"
     assert defaults["clientIp"] == "192.168.1.2"
     assert defaults["netStatus"] == "wifi"
