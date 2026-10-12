@@ -231,9 +231,19 @@ say "地址已保存，应用会自动读取。不会修改官方配置或已有
 
 stage "启动服务并扫码"
 if [[ "$SETUP_MODE" == local ]]; then
-  step "在一个终端运行：uv run music-tui --netease-service"
-  note "首次启动会通过 npx 获取固定版本服务。保持此终端运行。"
+  if [[ "$(uname -s)" == Darwin ]]; then
+    step "启动后台服务：uv run music-tui --netease-service"
+    note "launchd 会在服务异常退出后自动重启，关闭终端不会停止服务。"
+    note "重复启动不会创建多个服务；注销或重启电脑后需重新启动。"
+    note "查看状态：uv run music-tui --netease-service-status"
+    note "停止服务：uv run music-tui --netease-service-stop"
+    note "服务日志：${XDG_CONFIG_HOME:-$HOME/.config}/music-tui/enhanced-service.log"
+  else
+    step "按 docs/netease-setup.md 的 npx 命令手动启动服务，并保持服务终端运行。"
+    note "当前系统不支持 --netease-service 守护命令。"
+  fi
+  note "首次启动会通过 npx 获取固定版本服务。"
 fi
-step "在另一个终端运行：uv run music-tui"
+step "启动播放器：uv run music-tui"
 step "按 F2 选择网易云 Enhanced，再按 L 用网易云音乐 App 扫码确认。"
 say "也可直接运行 uv run music-tui --source netease。"

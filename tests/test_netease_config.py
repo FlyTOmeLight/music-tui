@@ -142,3 +142,20 @@ async def test_default_netease_start_reads_saved_enhanced_address(
     monkeypatch.setattr(app, "MusicApp", Interface)
     await app.run("netease", override)
     assert recorded == [override or configured]
+
+
+@pytest.mark.parametrize("action", ["status", "stop"])
+def test_service_management_option_does_not_start_music(monkeypatch, action):
+    """Route background service controls without creating a player or music source."""
+    from music_tui import netease_enhanced_setup
+
+    calls = []
+    monkeypatch.setattr(
+        netease_enhanced_setup, "run_service", lambda selected: calls.append(selected) or 0
+    )
+    monkeypatch.setattr(app, "run", lambda *args: pytest.fail("service control started music"))
+    monkeypatch.setattr("sys.argv", ["music-tui", f"--netease-service-{action}"])
+    with pytest.raises(SystemExit) as result:
+        app.main()
+    assert result.value.code == 0
+    assert calls == [action]

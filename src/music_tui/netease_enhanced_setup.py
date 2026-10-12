@@ -1,14 +1,16 @@
-"""Prepare local Enhanced service settings and run its pinned foreground process."""
+"""Prepare local Enhanced service settings and manage its macOS background service."""
 
 import argparse
 import json
 import os
+import plistlib
 import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -159,41 +161,116 @@ def save(target: Path) -> None:
     print(f"已保存网易云 Enhanced 配置：{url}")
 
 
-def run_service() -> int:
-    """Run the pinned Enhanced package in the foreground on the saved loopback port."""
+SERVICE_LABEL = "org.music-tui.netease-enhanced"
+
+
+def _launchctl(*arguments: str) -> subprocess.CompletedProcess:
+    """Run the native service controller without exposing its environment output."""
+    return subprocess.run(
+        ["/bin/launchctl", *arguments], capture_output=True, text=True, check=False, timeout=10
+    )
+
+
+def _write_service(port: int) -> Path:
+    """Save a private launchd job with automatic restart and private output logs."""
+    directory = config_directory().resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    log = directory / "enhanced-service.log"
+    descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
+        os.fchmod(descriptor, 0o600)
+    finally:
+        os.close(descriptor)
+    job = {
+        "Label": SERVICE_LABEL,
+        "ProgramArguments": [shutil.which("npx"), "--yes", PACKAGE],
+        "WorkingDirectory": str(directory),
+        "EnvironmentVariables": {
+            "PATH": os.environ.get("PATH", os.defpath),
+            "HOST": "127.0.0.1",
+            "PORT": str(port),
+            "ENABLE_GENERAL_UNBLOCK": "false",
+            "ENABLE_PROXY": "false",
+        },
+        "KeepAlive": True,
+        "ThrottleInterval": 5,
+        "Umask": 0o077,
+        "StandardOutPath": str(log),
+        "StandardErrorPath": str(log),
+    }
+    path = directory / "enhanced-service.plist"
+    descriptor, temporary = tempfile.mkstemp(dir=directory, prefix=".enhanced-service-")
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            plistlib.dump(job, stream)
+        Path(temporary).replace(path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return path
+
+
+def run_service(action: str = "start") -> int:
+    """Start, inspect, or stop the login-session service managed by macOS launchd."""
+    try:
+        if sys.platform != "darwin":
+            raise ValueError("后台服务目前支持 macOS；其他系统请按配置指南手动运行 npx。")
+        domain = f"gui/{os.getuid()}"
+        target = f"{domain}/{SERVICE_LABEL}"
+        loaded = _launchctl("print", target).returncode == 0
+        log = config_directory().resolve() / "enhanced-service.log"
+        if action == "stop":
+            if loaded and _launchctl("bootout", target).returncode:
+                raise ValueError("停止网易云后台服务失败，请检查 launchctl。")
+            print("网易云后台服务已停止。" if loaded else "网易云后台服务未启动。")
+            return 0
         url = _url(load_enhanced_config()["apiUrl"])
+        if action == "status":
+            healthy = _is_enhanced(url)
+            print(
+                f"后台守护：{'已注册' if loaded else '未注册'}；"
+                f"API：{'可连接' if healthy else '不可连接'}"
+            )
+            print(f"日志：{log}")
+            return 0 if loaded and healthy else 1
+        if action != "start":
+            raise ValueError("未知服务操作。")
         port = _local_port(url)
         if port is None:
             raise ValueError("当前配置使用已有 API 服务，无需启动本机服务。")
-        if not _port_available(port):
+        if not loaded:
+            if not _port_available(port):
+                if _is_enhanced(url):
+                    raise ValueError(
+                        "已有网易云服务正在运行，但未纳入后台守护。"
+                        "请先停止原服务，再运行 --netease-service。"
+                    )
+                raise ValueError("配置的端口已被其他服务占用，请重跑 music-tui --setup-netease。")
+            ready, message = _node_status()
+            if not ready:
+                raise ValueError(message)
+            path = _write_service(port)
+            if _launchctl("bootstrap", domain, str(path)).returncode:
+                raise ValueError("注册网易云后台服务失败，请检查 launchctl 和当前桌面登录会话。")
+        print(f"正在检查网易云后台服务：{url}…", flush=True)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
             if _is_enhanced(url):
-                print("网易云 Enhanced 服务已经运行，可直接启动 music-tui。")
+                print("网易云后台服务已就绪，关闭终端后继续运行，异常退出后自动重启。")
+                print(f"日志：{log}")
                 return 0
-            raise ValueError("配置的端口已被其他服务占用，请重跑 music-tui --setup-netease。")
-        ready, message = _node_status()
-        if not ready:
-            raise ValueError(message)
-        print(f"正在启动网易云 Enhanced：{url}；请保留此终端。", flush=True)
-        result = subprocess.run(
-            ["npx", "--yes", PACKAGE],
-            env={
-                **os.environ,
-                "HOST": "127.0.0.1",
-                "PORT": str(port),
-                "ENABLE_GENERAL_UNBLOCK": "false",
-                "ENABLE_PROXY": "false",
-            },
-            check=False,
+            time.sleep(0.5)
+        raise ValueError(
+            "后台服务已注册，但 API 尚未就绪。首次下载可能较慢，"
+            f"请稍后运行 --netease-service-status。日志：{log}"
         )
-        return result.returncode
     except KeyboardInterrupt:
+        print("已取消等待；后台服务可用 --netease-service-stop 停止。", file=sys.stderr)
         return 130
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 1
-    except OSError:
-        print("网易云服务启动失败，请检查 Node.js 安装后重试。", file=sys.stderr)
+    except (OSError, subprocess.TimeoutExpired):
+        print("网易云后台服务操作失败，请检查目录权限和 launchctl。", file=sys.stderr)
         return 1
 
 

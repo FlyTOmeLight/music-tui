@@ -94,13 +94,22 @@ uv run music-tui --setup-netease
 选择「本机服务」即可。向导检查 Node.js 22+ 和 npx，自动选择空闲本机端口并保存服务地址。
 已有服务时，选择「已有服务」并填写地址即可。详细步骤见[网易云配置指南](docs/netease-setup.md)。
 
-本机方式需要两个终端。在终端 A 启动服务，并保持它运行：
+macOS 本机服务由 launchd 在后台守护，执行启动命令后即可继续使用当前终端：
 
 ```sh
 uv run music-tui --netease-service
 ```
 
-在终端 B 启动播放器：
+服务异常退出后会自动重启，关闭终端不会停止服务；重复启动不会创建多个服务。
+服务仅在当前登录会话运行，注销或重启电脑后需重新执行启动命令。
+查看状态或主动停止服务：
+
+```sh
+uv run music-tui --netease-service-status
+uv run music-tui --netease-service-stop
+```
+
+随后启动播放器：
 
 ```sh
 uv run music-tui
@@ -113,8 +122,11 @@ uv run music-tui
 服务停止后，播放器的网易云请求会提示连接错误。
 
 服务配置保存在 `~/.config/music-tui/enhanced.json`，支持 `XDG_CONFIG_HOME`。
+服务日志保存在 `~/.config/music-tui/enhanced-service.log`；设置 `XDG_CONFIG_HOME`
+时使用 `$XDG_CONFIG_HOME/music-tui/enhanced-service.log`。
 后续无需重新运行向导。`--netease-api-url` 可临时覆盖保存的服务地址。
 已有服务也必须关闭全局解锁功能，具体命令见配置指南。
+其他操作系统暂不支持上述守护命令，可按配置指南使用 npx 手动运行服务。
 
 官方开放平台保留为可选接入。已有获批应用凭证和设备参数时，执行：
 

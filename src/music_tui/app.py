@@ -1059,13 +1059,25 @@ def main() -> None:
     actions.add_argument(
         "--netease-service",
         action="store_true",
-        help="Run the configured local Enhanced API service",
+        help="Start the configured local Enhanced API service in the background (macOS)",
+    )
+    actions.add_argument(
+        "--netease-service-status",
+        action="store_true",
+        help="Check the Enhanced background service",
+    )
+    actions.add_argument(
+        "--netease-service-stop", action="store_true", help="Stop the Enhanced background service"
     )
     arguments = parser.parse_args()
     if arguments.setup_netease:
         from .netease_config import run_setup
 
         raise SystemExit(run_setup(arguments.netease_backend))
+    if arguments.netease_service_status or arguments.netease_service_stop:
+        from .netease_enhanced_setup import run_service
+
+        raise SystemExit(run_service("stop" if arguments.netease_service_stop else "status"))
     if arguments.netease_service:
         from .netease_enhanced_setup import run_service
 
