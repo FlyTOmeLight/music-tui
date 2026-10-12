@@ -19,6 +19,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Static
 
 from .models import LoginState, Playlist, Quality, SongPage, Track
+from .netease_config import load_official_config
 from .player import Player
 from .sources import MusicSource
 from .sources.netease_openapi import OfficialAPIError
@@ -1006,11 +1007,12 @@ async def run(
         if key == "netease-official":
             from .sources.netease_official import OfficialNetEaseMusic
 
-            private_key_file = os.environ.get("NETEASE_PRIVATE_KEY_FILE")
-            device_file = os.environ.get("NETEASE_DEVICE_FILE")
+            configuration = load_official_config()
+            private_key_file = configuration.get("privateKeyFile")
+            device_file = configuration.get("deviceFile")
             return OfficialNetEaseMusic(
                 data_home / "music-tui" / "netease-official",
-                app_id=os.environ.get("NETEASE_APP_ID", ""),
+                app_id=configuration.get("appId", ""),
                 private_key_path=Path(private_key_file) if private_key_file else None,
                 device_file=Path(device_file) if device_file else None,
             )
@@ -1046,7 +1048,16 @@ def main() -> None:
         default="http://127.0.0.1:3000",
         help="NeteaseCloudMusicApiEnhanced service URL (enhanced backend only)",
     )
+    parser.add_argument(
+        "--setup-netease",
+        action="store_true",
+        help="Interactively configure the official NetEase API",
+    )
     arguments = parser.parse_args()
+    if arguments.setup_netease:
+        from .netease_config import run_setup
+
+        raise SystemExit(run_setup())
     try:
         asyncio.run(run(arguments.source, arguments.netease_api_url, arguments.netease_backend))
     except ValueError as error:

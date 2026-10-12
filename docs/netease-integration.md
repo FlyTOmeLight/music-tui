@@ -5,8 +5,10 @@
 ## 后端选择
 
 默认使用网易云官方开放平台，Python 通过 HTTPS 直接请求，无需本地 Node 服务。
-使用 `NETEASE_APP_ID`、`NETEASE_PRIVATE_KEY_FILE`、`NETEASE_DEVICE_FILE` 配置应用 ID、
-RSA 私钥文件和设备 JSON 文件。设备字段必须按应用接入资料填写，完整必填字段和签名、
+运行 `uv run music-tui --setup-netease`，向导保存应用 ID、RSA 私钥和设备配置。
+配置目录为 `$XDG_CONFIG_HOME/music-tui/`，未设置时为 `~/.config/music-tui/`；启动时自动读取。
+`NETEASE_APP_ID`、`NETEASE_PRIVATE_KEY_FILE`、`NETEASE_DEVICE_FILE` 可逐项覆盖本机配置。
+设备中网易云分配的字段需手动填写；其余字段由向导生成或检测。完整必填字段和签名、
 认证、资源 ID 契约见[官方 API 接入依据](netease-official-api.md)。
 
 ```sh

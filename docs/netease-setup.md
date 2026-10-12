@@ -14,89 +14,82 @@ Music TUI 中按 `F2` 可选择 QQ 音乐、网易云官方、网易云 Enhanced
 
 `appId` 是开发者应用 ID，不是网易云账号 UID。`privateKey` 是该应用的 RSA 私钥，不是密码、Cookie 或 `appSecret`。
 
-## 2. 保存应用私钥
+## 2. 运行交互式配置
 
-在终端创建应用配置目录，然后打开私钥文件：
-
-```sh
-mkdir -p "$HOME/.config/music-tui"
-chmod 700 "$HOME/.config/music-tui"
-nano "$HOME/.config/music-tui/netease-private-key.pem"
-```
-
-粘贴应用详情中的完整 `privateKey` 并保存。支持带 `-----BEGIN PRIVATE KEY-----` / `-----END PRIVATE KEY-----` 的 PEM 内容，也支持平台提供的纯 Base64 私钥。不要给内容加引号，也不要粘贴整个 JSON 对象。文件扩展名不影响读取。
+在项目目录执行：
 
 ```sh
-chmod 600 "$HOME/.config/music-tui/netease-private-key.pem"
+uv run music-tui --setup-netease
 ```
 
-私钥保存在上面的本机目录，不要放进项目仓库。Music TUI 使用它签名请求，无需安装官方 `ncm-cli`。
+先准备应用详情中的 `appId`、`privateKey`，以及网易云确认的四个设备字段。
+向导逐项提问，私钥输入不会显示在终端。
 
-## 3. 确认设备参数并创建 JSON
-
-**这一步不能仅凭 `appId` 和私钥自动完成。** 当前客户端采用官方公共参数中的 `device` 结构。公开文档将其标为 IOT 端参数，并注明移动端 App 亦可；其中四个字段需要由网易云分配或确认。公开个人入驻说明没有提供桌面终端可直接套用的通用值。[官方公共参数](https://developer.music.163.com/st/developer/document?docId=0f7801d7d6d24180b8fc9058d1ffe593)
-
-| 字段 | 从哪里取得 / 怎样填写 |
+| 需要填写 | 内容 |
 | --- | --- |
-| `channel`、`os` | 网易云分配给应用的值；按应用接入资料填写，缺失时联系平台确认。 |
-| `deviceType`、`brand` | 由网易云确认；不要直接复制文档里的车机示例。 |
-| `deviceId` | 本机生成一次，长期保持不变。仅限字母和数字，最多 64 位。 |
-| `appVer` | 本客户端版本，当前为 `0.1.0`；格式为三段数字。 |
-| `osVer`、`model` | 实际系统版本与设备型号。 |
-| `clientIp` | 设备调用接口时的 IP，按应用接入要求填写。 |
-| `netStatus` | 实际网络类型：`wifi`、`2g`、`3g`、`4g` 或 `5g`。其他网络类型向平台确认。 |
+| 应用 ID | 应用详情中的 `appId`，不是账号 UID。 |
+| 私钥 | 粘贴平台提供的单行 Base64 私钥，或输入已有 PEM 私钥文件路径。多行 PEM 先保存为文件。 |
+| `channel`、`os` | 网易云分配给应用的值。 |
+| `deviceType`、`brand` | 网易云为该应用确认的设备值。 |
 
-生成设备 ID；复制输出，后续不要反复生成：
+设备字段以应用接入资料为准；缺失时联系平台确认。
+公开个人入驻说明没有提供桌面终端可直接套用的通用值，不要复制车机示例。
+[官方公共参数](https://developer.music.163.com/st/developer/document?docId=0f7801d7d6d24180b8fc9058d1ffe593)
 
-```sh
-uv run python -c 'import uuid; print(uuid.uuid4().hex)'
-nano "$HOME/.config/music-tui/netease-device.json"
-```
+以下项目自动处理：
 
-将以下 JSON 粘贴到文件。**把所有 `REPLACE_...` 替换为实际值**；示例中的 `wifi` 也应与实际网络一致：
+- 创建配置目录和文件，将私钥权限设为 `0600`。
+- 生成符合要求的设备 ID，重新配置时保持原 ID。
+- 读取客户端版本；检测系统版本、设备型号、IP 和网络类型。
+- 系统版本、型号或网络信息无法可靠检测时，才要求填写对应字段。
 
-```json
-{
-  "channel": "REPLACE_WITH_ASSIGNED_CHANNEL",
-  "deviceId": "REPLACE_WITH_GENERATED_DEVICE_ID",
-  "deviceType": "REPLACE_WITH_CONFIRMED_DEVICE_TYPE",
-  "appVer": "0.1.0",
-  "os": "REPLACE_WITH_ASSIGNED_OS",
-  "osVer": "REPLACE_WITH_SYSTEM_VERSION",
-  "brand": "REPLACE_WITH_CONFIRMED_BRAND",
-  "model": "REPLACE_WITH_DEVICE_MODEL",
-  "clientIp": "REPLACE_WITH_CLIENT_IP",
-  "netStatus": "wifi"
-}
-```
+`netStatus` 支持 `wifi`、`2g`、`3g`、`4g`、`5g`。其他网络类型需向网易云确认适用值。
+向导不会申请开发者身份、初始化开放平台应用或获取接口授权。
 
-拿不到这些参数时，当前原生官方方式尚不能完成配置。可使用文末 Enhanced 方式，不要猜测设备身份。官方入口有无权限、个人应用能否使用所需接口，最终以平台授权为准。
+默认保存到 `~/.config/music-tui/`，设置了 `XDG_CONFIG_HOME` 时则保存到
+`$XDG_CONFIG_HOME/music-tui/`。应用 ID 与文件路径保存在 `netease.json`；
+私钥和设备字段分别存入本机文件。后续启动自动读取，无需修改 `~/.zshrc`。
+重新运行向导时，回车可保留已有非秘密设置和私钥，无需重复填写。
 
-## 4. 启动并扫码登录
-
-在项目目录、同一个终端执行：
+## 3. 启动并扫码登录
 
 ```sh
-export NETEASE_APP_ID="替换为应用详情中的 appId"
+uv run music-tui
+```
+
+按 `F2` 选择网易云官方，再按 `l`，用网易云音乐手机 App 扫码并确认。
+向导只完成应用配置；扫码才会登录听歌账号。成功后会显示个人歌单。
+需要直接进入网易云时，执行 `uv run music-tui --source netease`。
+配置修改后需重新启动 Music TUI；日常在界面内切换平台即可。
+
+官方登录状态保存在 `~/.local/share/music-tui/netease-official/token.json`，支持 `XDG_DATA_HOME`。
+令牌过期后按 `l` 重新扫码。真实官方扫码和会员音源仍需获批应用凭证验证。
+
+## 手动配置与环境变量覆盖
+
+已有配置文件时，也可在启动程序的同一终端设置以下变量。
+每个变量分别优先于向导保存的对应设置，未设置的项仍读取本机配置。
+
+```sh
+export NETEASE_APP_ID="应用详情中的 appId"
 export NETEASE_PRIVATE_KEY_FILE="$HOME/.config/music-tui/netease-private-key.pem"
 export NETEASE_DEVICE_FILE="$HOME/.config/music-tui/netease-device.json"
 uv run music-tui
 ```
 
-按 `F2`，选择网易云官方；按 `l` 显示二维码，用网易云音乐手机 App 扫码并确认。成功后会显示个人歌单。需要直接进入网易云时，启动命令加 `--source netease`。
-
-上面的 `export` 仅影响当前终端及其启动的进程。确认可用后，可将这三行加入 `~/.zshrc`，让新终端自动读取。已经运行的 Music TUI 不会读取后来修改的环境变量，需要重启一次。私钥和设备文件只需准备一次；平时在界面内切换即可。
-
-官方登录状态保存在 `~/.local/share/music-tui/netease-official/token.json`，支持 `XDG_DATA_HOME`。令牌过期后按 `l` 重新扫码。已实现离线验证；真实官方扫码和会员音源仍需获批应用凭证验证。
+私钥文件支持完整 PEM 或纯 Base64 内容。设备文件为 JSON 对象，包含
+`channel`、`deviceId`、`deviceType`、`appVer`、`os`、`osVer`、`brand`、`model`、
+`clientIp`、`netStatus` 十个非空字段。`deviceId` 仅含字母和数字，最多 64 位。
+使用向导可省去手动创建这些文件。
 
 ## 常见错误
 
 | 提示 | 处理方式 |
 | --- | --- |
-| 需要三个 `NETEASE_*` 配置 | 检查是否在启动程序的同一终端执行了三条 `export`。路径须指向实际文件。 |
-| 无法读取私钥或设备配置 | 检查私钥是否完整，JSON 是否有漏引号、多余逗号；不要把文件路径写成文件内容。 |
-| 设备配置缺少公共参数 | 对照上面的十个字段；空值不被接受。 |
-| `deviceId` 格式错误 | 使用生成的 32 位 ID，不含连字符、空格或下划线。 |
+| 缺少官方配置 | 运行 `uv run music-tui --setup-netease`；若使用环境变量，检查其值是否覆盖了已保存配置。 |
+| 无法读取私钥或设备配置 | 重新运行向导，检查文件路径和私钥完整性；手动 JSON 检查引号和逗号。 |
+| 设备配置缺少公共参数 | 检查十个字段是否均为非空值；重新运行向导补齐。 |
+| `deviceId` 格式错误 | 使用向导生成的 ID，不含连字符、空格或下划线。 |
 | 应用未获此接口授权（300） | 向平台确认应用接口权限；重新扫码不能增加应用权限。 |
 | 无版权或需要会员 / 购买 | 按应用及账号的实际播放权限选择歌曲和音质。 |
 
