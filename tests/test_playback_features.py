@@ -79,6 +79,10 @@ class FeatureLibrary(Library):
         """Return the account's current liked state."""
         return self.liked
 
+    async def liked_ids(self):
+        """Return the fake account's confirmed liked-song identities."""
+        return {FIRST.mid, SECOND.mid, THIRD.mid} if self.liked else set()
+
     async def set_liked(self, track, liked):
         """Update liked state only after a successful simulated server write."""
         if self.fail_write:

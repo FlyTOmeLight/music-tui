@@ -4,6 +4,7 @@ import asyncio
 import os
 import tempfile
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urljoin, urlsplit
@@ -15,7 +16,18 @@ from qqmusic_api.models.login import QRCodeLoginEvents, QRLoginType
 from qqmusic_api.modules.login_utils import QRCodeLoginSession
 from qqmusic_api.modules.song import BaseSongFileType, SongFileInfo, SongFileType
 
-from ..models import LoginState, Lyrics, Playlist, Quality, QualityUnavailableError, SongPage, Track
+from ..models import (
+    Artist,
+    ArtistDetail,
+    ArtistOrder,
+    LoginState,
+    Lyrics,
+    Playlist,
+    Quality,
+    QualityUnavailableError,
+    SongPage,
+    Track,
+)
 from .lyrics import parse_lyrics
 
 
@@ -45,6 +57,7 @@ def track_from_song(song: Song) -> Track:
         song.type,
         tuple(song.vs),
         cover_url=song.cover_url(),
+        artists=tuple(Artist(s.mid, s.name) for s in song.singer if s.mid),
     )
 
 
@@ -238,21 +251,61 @@ class QQMusic:
             [track_from_song(s) for s in result.songs], bool(result.hasmore), result.total
         )
 
+    async def artist_detail(self, artist: Artist) -> ArtistDetail:
+        """Fetch optional biography and artwork for the exact QQ singer MID."""
+        async with asyncio.timeout(25):
+            result = await self.client.singer.get_desc([artist.id])
+        detail = next((s for s in result.singer_list if s.basic_info.mid == artist.id), None)
+        if detail is None:
+            return ArtistDetail(artist)
+        basic = detail.basic_info
+        return ArtistDetail(
+            Artist(basic.mid, basic.name or artist.name),
+            detail.pic.pic or (basic.cover_url() if basic.has_photo else ""),
+            detail.ex_info.desc,
+        )
+
+    async def artist_songs(self, artist: Artist, order: ArtistOrder, page: int = 1) -> SongPage:
+        """Page the server's complete hot or latest order using its verified num field."""
+        offset = (page - 1) * 30
+        request = self.client.singer.get_songs_list(artist.id, num=30, page=page)
+        request = replace(
+            request,
+            param={
+                "singerMid": artist.id,
+                "order": 1 if order == ArtistOrder.HOT else 2,
+                "num": 30,
+                "begin": offset,
+            },
+        )
+        async with asyncio.timeout(25):
+            result = await request
+        return SongPage(
+            [track_from_song(song) for song in result.song_list],
+            offset + len(result.song_list) < result.total_num,
+            result.total_num,
+            page_size=30,
+        )
+
     async def lyrics(self, track: Track) -> Lyrics:
         """Let the pinned SDK decrypt original and translated LRC before parsing."""
         async with asyncio.timeout(25):
             result = await self.client.lyric.get_lyric(track.mid, trans=True)
         return parse_lyrics(result.lyric, result.trans)
 
-    async def is_liked(self, track: Track) -> bool:
-        """Read all liked-song pages so songs beyond the first page are recognized."""
+    async def liked_ids(self) -> set[str]:
+        """Collect every liked-song page using the same opaque MID as search tracks."""
         if not self.logged_in:
             raise ValueError("请先按 L 扫码登录")
         async with asyncio.timeout(25):
             songs = await self.client.user.get_fav_song(
                 self.client.credential.encrypt_uin, num=100
             ).collect_items()
-        return any(song.mid == track.mid for song in songs)
+        return {song.mid for song in songs}
+
+    async def is_liked(self, track: Track) -> bool:
+        """Recognize liked songs beyond the first page by their platform identity."""
+        return track.mid in await self.liked_ids()
 
     async def set_liked(self, track: Track, liked: bool) -> None:
         """Resolve the numeric song identity and explicitly set the QQ like state."""

@@ -2,7 +2,17 @@
 
 from typing import Protocol
 
-from ..models import LoginSession, Lyrics, Playlist, Quality, SongPage, Track
+from ..models import (
+    Artist,
+    ArtistDetail,
+    ArtistOrder,
+    LoginSession,
+    Lyrics,
+    Playlist,
+    Quality,
+    SongPage,
+    Track,
+)
 
 
 class MusicSource(Protocol):
@@ -38,6 +48,18 @@ class MusicSource(Protocol):
 
     async def lyrics(self, track: Track) -> Lyrics:
         """Return timed or plain lyrics, or an empty value when lyrics are absent."""
+        ...
+
+    async def artist_detail(self, artist: Artist) -> ArtistDetail:
+        """Read an artist's profile without selecting playback."""
+        ...
+
+    async def artist_songs(self, artist: Artist, order: ArtistOrder, page: int = 1) -> SongPage:
+        """Fetch songs ordered across the whole artist collection before paging."""
+        ...
+
+    async def liked_ids(self) -> set[str]:
+        """Return the account's liked song identities in Track.mid form."""
         ...
 
     async def is_liked(self, track: Track) -> bool:

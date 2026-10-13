@@ -28,6 +28,35 @@ class QualityUnavailableError(ValueError):
 
 
 @dataclass(frozen=True)
+class Artist:
+    """An artist's opaque platform identity and display name."""
+
+    id: str
+    name: str
+
+
+class ArtistOrder(Enum):
+    """Platform-wide ordering applied before an artist's songs are paginated."""
+
+    HOT = "hot"
+    LATEST = "time"
+
+    @property
+    def label(self) -> str:
+        """Name the global ordering shown in the artist browser."""
+        return "热门" if self is ArtistOrder.HOT else "最新"
+
+
+@dataclass(frozen=True)
+class ArtistDetail:
+    """Artist identity with optional portrait and short biography."""
+
+    artist: Artist
+    cover_url: str = ""
+    description: str = ""
+
+
+@dataclass(frozen=True)
 class Track:
     """Song metadata with an opaque source ID and optional QQ media variants."""
 
@@ -39,6 +68,7 @@ class Track:
     song_type: int = 0
     variants: tuple[str, ...] = ()
     cover_url: str = ""
+    artists: tuple[Artist, ...] = ()
 
 
 @dataclass(frozen=True)

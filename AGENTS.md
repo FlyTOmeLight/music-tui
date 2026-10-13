@@ -46,3 +46,17 @@ QQ credentials remain at `~/.local/share/qqmusic-tui/credential.json`, respectin
 ## Agent Collaboration
 
 Delegate independent parallel tasks to sub-agents with explicit inputs, outputs, file ownership, and completion criteria. The main agent integrates and verifies results. Keep tasks with shared state or sequential decisions together.
+
+## Agent skills
+
+### Issue tracker
+
+规格与任务使用 GitHub Issues（FlyTOmeLight/music-tui）。发布、读取和任务依赖约定见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用默认五种状态标签；角色与标签映射见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+项目采用单一领域上下文。探索和编写规格前读取 `CONTEXT.md` 与相关 ADR；详细约定见 `docs/agents/domain.md`。

@@ -14,7 +14,7 @@ def song(mid):
         mid=mid,
         title="歌曲",
         name="歌曲",
-        singer=[SimpleNamespace(name="歌手")],
+        singer=[SimpleNamespace(mid="singer-mid", name="歌手")],
         interval=180,
         file=SimpleNamespace(media_mid=mid),
         type=0,

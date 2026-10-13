@@ -20,6 +20,7 @@ from textual.widgets import (
     Tabs,
 )
 
+from .artists import artist_names
 from .artwork import AlbumArtwork
 from .models import Lyrics, Track
 from .screens import LyricsPanel, QueuePanel, QueueState
@@ -60,6 +61,7 @@ class PlaybackScreen(Screen):
     """Present song identity and live controls without owning audio or queue state."""
 
     BINDINGS = [
+        Binding("i", "dispatch('artist')", "歌手详情", priority=True, show=False),
         Binding("escape,f7", "dispatch('browse')", "返回浏览", priority=True),
         Binding("p", "dispatch('previous')", "上一首", priority=True),
         Binding("space", "dispatch('pause')", "暂停", priority=True),
@@ -289,6 +291,8 @@ class PlaybackScreen(Screen):
         self.update_text(
             "playback-artist", state.track.artist if state.track else "返回浏览页搜索歌曲"
         )
+        if state.track:
+            self.query_one("#playback-artist", Static).update(artist_names(state.track))
         duration = _timestamp(state.duration) if state.duration > 0 else "--:--"
         self.update_text("playback-time", f"{_timestamp(state.position)} / {duration}")
         if previous is None or (state.position, state.duration) != (

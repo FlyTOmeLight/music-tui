@@ -8,9 +8,10 @@ from dataclasses import asdict
 from importlib.metadata import version
 from pathlib import Path
 
+from rich.style import Style
 from rich.text import Text
 from terminal_qrcode import draw
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Horizontal, Vertical
@@ -29,13 +30,28 @@ from textual.widgets import (
     Tabs,
 )
 
+from .artists import ArtistPanel, ArtistPicker, ArtistReturn, artist_names
 from .history_screen import HistoryEntry, HistoryScreen
-from .models import LoginState, Lyrics, Playlist, Quality, QualityUnavailableError, SongPage, Track
+from .likes import SearchLikes
+from .models import (
+    Artist,
+    ArtistDetail,
+    ArtistOrder,
+    LoginState,
+    Lyrics,
+    Playlist,
+    Quality,
+    QualityUnavailableError,
+    SongPage,
+    Track,
+)
 from .netease_config import load_enhanced_config, load_official_config
 from .playback_queue import PlaybackEvents, PlaybackQueue, QueueSelection
 from .playback_screen import PlaybackScreen, PlaybackState
 from .playback_session import (
+    ArtistSongs,
     PlaybackSnapshot,
+    PlaybackSource,
     PlaylistSearch,
     QueuedTrack,
     RepeatMode,
@@ -56,6 +72,7 @@ from .sources import MusicSource
 from .sources.netease_openapi import OfficialAPIError
 from .sources.qqmusic import QQMusic
 from .themes import DAY, NIGHT, detect_system_theme
+from .transport import BottomTransport
 
 
 def timestamp(seconds: float | None) -> str:
@@ -318,6 +335,15 @@ class SongTable(DataTable):
         Binding("pagedown", "app.next_page", "下一页", show=False),
     ]
 
+    async def _on_click(self, event: events.Click) -> None:
+        """Handle inline artist/like actions without emitting a row-play selection."""
+        event.prevent_default()
+        if "@click" in event.style.meta:
+            event.stop()
+            await self.broker_event("click", event)
+        else:
+            await super()._on_click(event)
+
 
 class MusicApp(App):
     TITLE = "Music TUI"
@@ -406,8 +432,9 @@ class MusicApp(App):
         background: $block-cursor-background; color: $accent; text-style: bold;
     }
     #player-box { height: 3; padding: 0 2; border-top: solid $border; background: $surface; }
+    #playback-line { height: 1; }
     #now-playing { height: 1; text-overflow: ellipsis; color: $accent; text-style: bold; }
-    #playback-detail { height: 1; text-overflow: ellipsis; color: $text-muted; }
+    #playback-detail { height: 1; width: 1fr; text-overflow: ellipsis; color: $text-muted; }
     #status { height: 1; text-overflow: ellipsis; padding: 0 2; color: $text-muted; }
     Footer { background: $surface; }
     FooterKey { background: $surface; color: $text-muted; }
@@ -429,6 +456,7 @@ class MusicApp(App):
         Binding("s", "like", "喜欢", show=False),
         Binding("w", "add_to_playlist", "加入歌单", show=False),
         Binding("g", "locate", "定位当前", show=False),
+        Binding("i", "artist", "歌手详情", show=False),
         Binding("ctrl+r", "refresh", "刷新", show=False),
         Binding("p", "previous", "上一首", show=False),
         Binding("n", "next", "下一首", show=False),
@@ -532,7 +560,12 @@ class MusicApp(App):
         self.playlists: list[Playlist] = []
         self.displayed_playlists: list[Playlist] = []
         self.tracks: list[Track] = []
-        self.source: str | Playlist | PlaylistSearch | None = None
+        self.source: PlaybackSource = None
+        self.artist_returns: list[ArtistReturn] = []
+        self.artist_detail: ArtistDetail | None = None
+        self.failed_artist_view: tuple[ArtistSongs, int] | None = None
+        self.search_likes: SearchLikes | None = None
+        self._view_generation = getattr(self, "_view_generation", 0) + 1
         self.page = 1
         self.has_more = False
         self.total = 0
@@ -649,6 +682,7 @@ class MusicApp(App):
                 yield ListView(id="playlists")
                 yield Static("L 账号\nCtrl+R 刷新", id="library-hint", markup=False)
             with Vertical(id="songs-box"):
+                yield ArtistPanel(id="artist-panel")
                 yield Static("选择歌单，或搜索一首歌", id="view-title", markup=False)
                 with Horizontal(id="view-toolbar"):
                     yield Static("尚未加载列表", id="view-meta", markup=False)
@@ -674,7 +708,9 @@ class MusicApp(App):
                     )
         with Vertical(id="player-box"):
             yield Static("尚未播放", id="now-playing", markup=False)
-            yield Static("选中歌曲后按 Enter 播放", id="playback-detail", markup=False)
+            with Horizontal(id="playback-line"):
+                yield Static("选中歌曲后按 Enter 播放", id="playback-detail", markup=False)
+                yield BottomTransport(self.get_playback_state, self.handle_playback_action)
         yield Static(self.last_status_message, id="status", markup=False)
         yield Footer(compact=True)
 
@@ -805,6 +841,7 @@ class MusicApp(App):
                 "library-action",
                 "queue-view",
                 "account",
+                "search-likes",
             ):
                 pending.extend(self.workers.cancel_group(self, group))
             await asyncio.gather(*(worker.wait() for worker in pending), return_exceptions=True)
@@ -816,6 +853,7 @@ class MusicApp(App):
             self.source_key = key
             self.return_to_browse()
             self.reset_library()
+            self.query_one(ArtistPanel).display = False
             self.quality, self.repeat_mode, self.playback_volume = preferences
             if self.session_store is not None and self.ready:
                 await self.player.command("set_property", "volume", self.playback_volume)
@@ -901,6 +939,8 @@ class MusicApp(App):
             self.account_logged_in = True
             self.sync_playlist_actions()
             self.active_account_id = account_id
+            if self.search_likes is not None:
+                self.search_likes.bind(self.music)
             self.update_heading()
             self.load_playlists()
             if self.session_store is not None:
@@ -941,8 +981,10 @@ class MusicApp(App):
         if keyword := event.value.strip():
             self.load_view(keyword)
 
-    async def fetch(self, source: str | Playlist | PlaylistSearch, page: int) -> SongPage:
+    async def fetch(self, source: PlaybackSource, page: int) -> SongPage:
         """Fetch a page from global search, a playlist, or cached playlist matches."""
+        if isinstance(source, ArtistSongs):
+            return await self.music.artist_songs(source.artist, source.order, page)
         if isinstance(source, PlaylistSearch):
             start = (page - 1) * 100
             return SongPage(
@@ -955,23 +997,41 @@ class MusicApp(App):
         return await self.music.songs(source, page)
 
     @work(exclusive=True, group="view")
-    async def load_view(self, source: str | Playlist | PlaylistSearch, *, page: int = 1) -> None:
+    async def load_view(self, source: PlaybackSource, *, page: int = 1) -> None:
         """Fetch a song page and report failures in the status line."""
         self.status("正在加载歌曲…")
+        if not isinstance(source, ArtistSongs):
+            self.artist_returns.clear()
+        self._view_generation += 1
+        generation = self._view_generation
         try:
             result = await self.fetch(source, page)
+            if generation != self._view_generation:
+                return
             self.display_page(source, page, result)
+            if isinstance(source, ArtistSongs):
+                await self.load_artist_detail(source, generation)
         except Exception as error:
-            self.status(error_text(error))
+            if generation == self._view_generation:
+                if isinstance(source, ArtistSongs):
+                    self.failed_artist_view = source, page
+                self.status(error_text(error))
 
-    def display_page(
-        self, source: str | Playlist | PlaylistSearch, page: int, result: SongPage
-    ) -> None:
+    def display_page(self, source: PlaybackSource, page: int, result: SongPage) -> None:
         """Apply page metadata, playlist counts, and song-table focus."""
         if isinstance(source, Playlist) and page == 1:
             self.playlist_cache.pop(source, None)
         self.source, self.page, self.has_more = source, page, result.has_more
+        self.failed_artist_view = None
         self.tracks, self.total, self.page_size = result.tracks, result.total, result.page_size
+        panel = self.query_one(ArtistPanel)
+        panel.display = isinstance(source, ArtistSongs)
+        if isinstance(source, ArtistSongs):
+            if self.artist_detail is None or self.artist_detail.artist.id != source.artist.id:
+                self.artist_detail = ArtistDetail(source.artist)
+            panel.show_detail(self.artist_detail)
+            self.query_one("#artist-order", Button).label = f"排序：{source.order.label} ↔"
+            self.query_one("#artist-back", Button).disabled = not self.artist_returns
         field = self.query_one("#filter", Input)
         field.display = isinstance(source, (Playlist, PlaylistSearch))
         field.value = source.keyword if isinstance(source, PlaylistSearch) else ""
@@ -992,6 +1052,8 @@ class MusicApp(App):
                 else "没有找到歌曲"
             )
         )
+        if isinstance(source, str) and self.account_logged_in:
+            self.refresh_search_likes()
 
     def update_playlist_counts(self) -> None:
         """Refresh sidebar counts from loaded metadata or playlist defaults."""
@@ -1163,6 +1225,131 @@ class MusicApp(App):
         else:
             self.status("请先打开一个歌单，再按 F 搜索歌单内歌曲")
 
+    def action_artist(self) -> None:
+        """Open the chosen song's exact artist, offering keyboard choice for duets."""
+        if isinstance(self.screen, ModalScreen) or self.switching:
+            return
+        track = (
+            self.quality_track()
+            if isinstance(self.screen, PlaybackScreen)
+            else self.selected_track()
+        )
+        if track is None or not track.artists:
+            self.status("这首歌曲没有可用的歌手信息")
+            return
+        if len(track.artists) == 1:
+            artist = track.artists[0]
+            self.action_open_artist(artist.id, artist.name)
+        else:
+            self.push_screen(ArtistPicker(track.artists), self.choose_artist)
+
+    def choose_artist(self, artist: Artist | None) -> None:
+        """Navigate after a contributor is selected without starting audio."""
+        if artist is not None:
+            self.action_open_artist(artist.id, artist.name)
+
+    def action_open_artist(self, identity: str, name: str) -> None:
+        """Snapshot the browser before navigating from any clickable artist name."""
+        if self.switching or isinstance(self.screen, ModalScreen):
+            return
+        table = self.query_one("#songs", DataTable)
+        screen = "playback" if isinstance(self.screen, PlaybackScreen) else "browse"
+        tab = (
+            self.screen.query_one("#playback-tabs", TabbedContent).active
+            if screen == "playback"
+            else "song"
+        )
+        self.artist_returns.append(
+            ArtistReturn(
+                self.source,
+                self.page,
+                SongPage(list(self.tracks), self.has_more, self.total, self.page_size),
+                self.sort_order,
+                table.cursor_row,
+                table.scroll_y,
+                self.focused.id if self.focused else None,
+                screen,
+                tab,
+                self.artist_detail,
+            )
+        )
+        self.return_to_browse()
+        self.sort_order = 0
+        source = ArtistSongs(Artist(identity, name))
+        self.display_page(source, 1, SongPage([], False, 0, 30))
+        self.load_view(source)
+
+    async def load_artist_detail(self, source: ArtistSongs, generation: int) -> None:
+        """Enrich a loaded song list without letting optional profile failure hide songs."""
+        try:
+            detail = await self.music.artist_detail(source.artist)
+        except Exception as error:
+            if generation == self._view_generation:
+                self.status(f"歌曲已加载；歌手简介加载失败：{error_text(error)}")
+        else:
+            if generation == self._view_generation and source == self.source:
+                self.artist_detail = detail
+                self.query_one(ArtistPanel).show_detail(detail)
+
+    @on(Button.Pressed, "#artist-order")
+    def change_artist_order(self) -> None:
+        """Reload the whole artist order from page one without replacing playback."""
+        if isinstance(self.source, ArtistSongs):
+            order = ArtistOrder.LATEST if self.source.order is ArtistOrder.HOT else ArtistOrder.HOT
+            self.sort_order = 0
+            self.load_view(ArtistSongs(self.source.artist, order))
+
+    @on(Button.Pressed, "#artist-back")
+    def action_artist_back(self) -> None:
+        """Restore the captured browser and listening page without network refetch."""
+        if not self.artist_returns:
+            return
+        self._view_generation += 1
+        self.workers.cancel_group(self, "view")
+        state = self.artist_returns.pop()
+        self.artist_detail = state.detail
+        self.sort_order = state.sort_order
+        self.display_page(state.source, state.page, state.result)
+        table = self.query_one("#songs", DataTable)
+        table.move_cursor(row=state.row)
+        table.scroll_to(y=state.scroll_y, animate=False)
+        if state.source is None:
+            self.query_one("#view-title", Static).update("选择歌单，或搜索一首歌")
+            self.query_one("#view-meta", Static).update("尚未加载列表")
+        if state.screen == "playback":
+            self.open_playback().show_tab(state.playback_tab)
+        if state.focus_id:
+            self.call_after_refresh(self.restore_artist_focus, state.focus_id)
+
+    def restore_artist_focus(self, identity: str) -> None:
+        """Restore a focus target only if it exists on the restored screen."""
+        targets = self.screen.query(f"#{identity}")
+        if targets:
+            targets.first().focus()
+
+    @work(group="search-likes", exclusive=True)
+    async def refresh_search_likes(self) -> None:
+        """Fetch account likes in one query and repaint only the current search."""
+        if self.search_likes is None:
+            self.search_likes = SearchLikes(self.music)
+        else:
+            self.search_likes.bind(self.music)
+        likes = self.search_likes
+        try:
+            updated = await likes.refresh()
+        except Exception as error:
+            if likes is self.search_likes and isinstance(self.source, str):
+                self.status(f"喜欢状态查询失败：{error_text(error)} · Ctrl+R 重试")
+        else:
+            if updated and likes is self.search_likes and isinstance(self.source, str):
+                self.draw_tracks()
+
+    def action_toggle_like(self, identity: str) -> None:
+        """Toggle the actual clicked search song without selecting or playing its row."""
+        track = next((track for track in self.tracks if track.mid == identity), None)
+        if track is not None and isinstance(self.source, str):
+            self.action_like(track)
+
     def draw_tracks(self) -> None:
         """Sort the visible page while retaining source indexes and the selected song."""
         table = self.query_one("#songs", DataTable)
@@ -1193,10 +1380,25 @@ class MusicApp(App):
             )
         self.query_one("#sort-order", Button).label = f"O 本页：{label}"
         for index, track in entries:
+            title = Text()
+            if isinstance(self.source, str):
+                state = self.search_likes.state(track) if self.search_likes else None
+                symbol = "?" if state is None else "♥" if state else "♡"
+                title.append(
+                    symbol,
+                    Style(
+                        color=self.get_css_variables()["accent"],
+                        meta={"@click": f"app.toggle_like({track.mid!r})"},
+                    ),
+                )
+                title.append(" ")
+            title.append(track.title)
+            artist = artist_names(track)
+            artist.style = self.get_css_variables()["text-muted"]
             table.add_row(
                 self.track_number(index, track),
-                Text(track.title),
-                Text(track.artist, style=self.get_css_variables()["text-muted"]),
+                title,
+                artist,
                 Text(timestamp(track.seconds), style=self.get_css_variables()["text-muted"]),
                 key=str(index),
             )
@@ -1205,7 +1407,10 @@ class MusicApp(App):
         table.move_cursor(row=min(row, max(0, len(self.tracks) - 1)))
         if self.source is None:
             return
-        if isinstance(self.source, PlaylistSearch):
+        if isinstance(self.source, ArtistSongs):
+            title = f"歌手：{self.source.artist.name} · {self.source.order.label}"
+            count = f"共 {self.total} 首"
+        elif isinstance(self.source, PlaylistSearch):
             title = self.source.playlist.title
             count = f"共 {self.source.playlist_total} 首 / 匹配 {self.total} 首"
         else:
@@ -1431,7 +1636,7 @@ class MusicApp(App):
             elapsed = props.get("time-pos") or 0
             duration = props.get("duration") or self.current.seconds
             volume = int(props.get("volume") or 0)
-            width = max(8, min(28, self.size.width - 60))
+            width = max(4, min(28, self.query_one("#playback-detail", Static).size.width - 34))
             filled = int(width * min(1, max(0, elapsed / duration))) if duration else 0
             bar = "━" * filled + "─" * (width - filled)
             title = f"{self.current.title} — {self.current.artist}  [{self.current_quality.label}]"
@@ -1448,9 +1653,26 @@ class MusicApp(App):
         message = f"{title}\n{detail.plain}"
         if message != self.now_playing_text:
             self.now_playing_text = message
-            self.query_one("#now-playing", Static).update(title)
+            track = self.current or self.playback_track
+            if track is not None:
+                heading = Text(f"{track.title} — ")
+                heading.append_text(artist_names(track))
+                if self.current_quality is not None:
+                    heading.append(f"  [{self.current_quality.label}]")
+                self.query_one("#now-playing", Static).update(heading)
+            else:
+                self.query_one("#now-playing", Static).update(title)
             self.query_one("#playback-detail", Static).update(detail)
             self.mark_playing_track()
+        if self.size.width < 60 and self.current is not None:
+            detail = Text(
+                f"{timestamp(props.get('time-pos'))}/"
+                f"{timestamp(props.get('duration') or self.current.seconds)}  "
+                f"音量 {int(props.get('volume') or 0)}%"
+            )
+            detail.stylize(self.get_css_variables()["accent"], 0, 5)
+            self.query_one("#playback-detail", Static).update(detail)
+        self.query_one(BottomTransport).refresh_state()
 
     def track_number(self, index: int, track: Track) -> Text:
         """Return a page-relative song number with the playing-track indicator."""
@@ -1562,6 +1784,13 @@ class MusicApp(App):
 
     def action_songs(self) -> None:
         """Return keyboard focus to the song table."""
+        if (
+            not isinstance(self.screen, (PlaybackScreen, HistoryScreen, ModalScreen))
+            and isinstance(self.source, ArtistSongs)
+            and self.artist_returns
+        ):
+            self.action_artist_back()
+            return
         self.return_to_browse()
         self.query_one("#songs", DataTable).focus()
 
@@ -1658,8 +1887,10 @@ class MusicApp(App):
         self.save_state()
 
     @staticmethod
-    def source_label(source: str | Playlist | PlaylistSearch | None) -> str:
+    def source_label(source: PlaybackSource) -> str:
         """Describe a browsing origin using platform-independent song-library names."""
+        if isinstance(source, ArtistSongs):
+            return f"歌手：{source.artist.name} · {source.order.label}"
         if isinstance(source, PlaylistSearch):
             return f"{source.playlist.title} · 筛选：{source.keyword}"
         if isinstance(source, Playlist):
@@ -1797,6 +2028,7 @@ class MusicApp(App):
             "search": self.action_search,
             "locate": self.action_locate,
             "filter": self.action_filter,
+            "artist": self.action_artist,
             "add_to_playlist": self.action_add_to_playlist,
             "create_playlist": self.action_create_playlist,
         }
@@ -1885,6 +2117,8 @@ class MusicApp(App):
     async def action_locate(self) -> None:
         """Return to the active song's original browsing page without replacing playback."""
         self.return_to_browse()
+        self._view_generation += 1
+        generation = self._view_generation
         track = self.playback_track
         if track is None:
             self.status("尚未播放歌曲")
@@ -1902,19 +2136,30 @@ class MusicApp(App):
             self.status("当前歌曲没有浏览来源")
             return
         try:
-            self.display_page(source, page, await self.fetch(source, page))
+            result = await self.fetch(source, page)
+            if generation != self._view_generation:
+                return
+            if not isinstance(source, ArtistSongs):
+                self.artist_returns.clear()
+            self.display_page(source, page, result)
             row = next((i for i, item in enumerate(self.tracks) if item.mid == track.mid), None)
             if row is None:
                 self.status("已返回播放来源，当前歌曲已不在这一页")
             else:
                 table = self.query_one("#songs", DataTable)
                 table.move_cursor(row=table.get_row_index(str(row)))
+            if isinstance(source, ArtistSongs):
+                await self.load_artist_detail(source, generation)
         except Exception as error:
-            self.status(error_text(error))
+            if generation == self._view_generation:
+                self.status(error_text(error))
 
     def action_refresh(self) -> None:
         """Refresh the active list, rebuilding playlist-filter matches when necessary."""
-        if isinstance(self.source, PlaylistSearch):
+        if self.failed_artist_view is not None:
+            source, page = self.failed_artist_view
+            self.load_view(source, page=page)
+        elif isinstance(self.source, PlaylistSearch):
             self.playlist_cache.pop(self.source.playlist, None)
             self.filter_playlist(self.source.playlist, self.source.keyword)
         elif self.source is not None:
@@ -1938,9 +2183,9 @@ class MusicApp(App):
             raise ValueError(error_text(error)) from error
 
     @work(group="library-action")
-    async def action_like(self) -> None:
+    async def action_like(self, track: Track | None = None) -> None:
         """Toggle the highlighted song's liked state after successful account requests."""
-        track = self.selected_track()
+        track = track or self.selected_track()
         if track is None or self.library_busy:
             return
         if not self.account_logged_in:
@@ -1949,12 +2194,16 @@ class MusicApp(App):
         self.library_busy = True
         self.status(f"正在更新喜欢状态：{track.title}")
         try:
-            liked = await self.music.is_liked(track)
-            await self.music.set_liked(track, not liked)
+            if self.search_likes is None:
+                self.search_likes = SearchLikes(self.music)
+            else:
+                self.search_likes.bind(self.music)
+            liked = await self.search_likes.toggle(track)
+            if liked is None:
+                return
+            self.draw_tracks()
             self.playlist_cache.clear()
-            self.load_playlists(
-                message=f"{'已取消喜欢' if liked else '已喜欢'}：{track.title} · Ctrl+R 刷新列表"
-            )
+            self.load_playlists(message=f"{'已喜欢' if liked else '已取消喜欢'}：{track.title}")
         except Exception as error:
             self.status(error_text(error))
         finally:

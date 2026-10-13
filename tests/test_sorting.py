@@ -17,6 +17,8 @@ TRACKS = [
 class SortingLibrary(Library):
     """Return deliberately different title, artist and numeric duration orders."""
 
+    account_id = "sorting-user"
+
     def __init__(self):
         """Record writes without making requests to a real account."""
         super().__init__()
@@ -30,6 +32,10 @@ class SortingLibrary(Library):
     async def playlists(self):
         """Expose one writable playlist for the destination picker."""
         return [self.editable]
+
+    async def liked_ids(self):
+        """Start with no liked songs, matching selected-row shortcut tests."""
+        return set()
 
     async def is_liked(self, track):
         """Report an unliked song so the shortcut performs an observable write."""

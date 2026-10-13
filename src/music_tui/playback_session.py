@@ -6,7 +6,7 @@ import math
 from dataclasses import asdict, dataclass
 from enum import Enum
 
-from music_tui.models import Playlist, Track
+from music_tui.models import Artist, ArtistOrder, Playlist, Track
 
 
 @dataclass(frozen=True)
@@ -19,7 +19,15 @@ class PlaylistSearch:
     playlist_total: int
 
 
-type PlaybackSource = str | Playlist | PlaylistSearch | None
+@dataclass(frozen=True)
+class ArtistSongs:
+    """A stable artist and global ordering used by browsing and playback."""
+
+    artist: Artist
+    order: ArtistOrder = ArtistOrder.HOT
+
+
+type PlaybackSource = str | Playlist | PlaylistSearch | ArtistSongs | None
 
 
 @dataclass(frozen=True)
@@ -42,6 +50,8 @@ class RepeatMode(Enum):
 
 def encode_source(source: PlaybackSource) -> dict | str | None:
     """Serialize an origin without credentials or temporary audio URLs."""
+    if isinstance(source, ArtistSongs):
+        return {"artist": asdict(source.artist), "order": source.order.value}
     if isinstance(source, PlaylistSearch):
         return {
             "playlist": asdict(source.playlist),
@@ -79,7 +89,11 @@ def decode_track(value: object) -> Track:
     variants = data.get("variants", ())
     if not isinstance(variants, list | tuple) or any(not isinstance(v, str) for v in variants):
         raise ValueError("保存的歌曲媒体信息无效")
-    track = Track(**{**data, "variants": tuple(variants)})
+    raw_artists = data.get("artists", ())
+    if not isinstance(raw_artists, list | tuple):
+        raise ValueError("保存的歌曲歌手信息无效")
+    artists = tuple(decode_artist(artist) for artist in raw_artists)
+    track = Track(**{**data, "variants": tuple(variants), "artists": artists})
     if (
         not isinstance(track.mid, str)
         or not track.mid
@@ -95,11 +109,21 @@ def decode_track(value: object) -> Track:
     return track
 
 
+def decode_artist(value: object) -> Artist:
+    """Validate a platform artist identity before restoring a source or song."""
+    artist = Artist(**_mapping(value))
+    if not isinstance(artist.id, str) or not artist.id or not isinstance(artist.name, str):
+        raise ValueError("保存的歌手信息无效")
+    return artist
+
+
 def decode_source(value: object) -> PlaybackSource:
     """Restore a playlist, search query or complete playlist-filter results."""
     if value is None or isinstance(value, str):
         return value
     data = _mapping(value)
+    if "artist" in data:
+        return ArtistSongs(decode_artist(data["artist"]), ArtistOrder(data["order"]))
     if "playlist" in data:
         keyword = data["keyword"]
         total = int(data["playlist_total"])

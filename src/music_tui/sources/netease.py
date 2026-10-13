@@ -12,7 +12,18 @@ from pathlib import Path
 
 import httpx
 
-from ..models import LoginState, Lyrics, Playlist, Quality, QualityUnavailableError, SongPage, Track
+from ..models import (
+    Artist,
+    ArtistDetail,
+    ArtistOrder,
+    LoginState,
+    Lyrics,
+    Playlist,
+    Quality,
+    QualityUnavailableError,
+    SongPage,
+    Track,
+)
 from .lyrics import parse_lyrics
 
 LEVELS = {
@@ -34,6 +45,7 @@ def _track(song: dict) -> Track:
         " / ".join(artist["name"] for artist in song.get("ar", [])),
         int(song.get("dt", 0)) // 1000,
         cover_url=(song.get("al") or {}).get("picUrl") or "",
+        artists=tuple(Artist(str(a["id"]), a["name"]) for a in song.get("ar", []) if a.get("id")),
     )
 
 
@@ -181,6 +193,30 @@ class NetEaseMusic:
             [_track(song) for song in data.get("songs", [])], offset + 30 < total, total, 30
         )
 
+    async def artist_detail(self, artist: Artist) -> ArtistDetail:
+        """Read profile fields for an exact Enhanced artist identity."""
+        result = await self._request("/artist/detail", id=artist.id)
+        data = (result.get("data") or {}).get("artist") or {}
+        return ArtistDetail(
+            Artist(artist.id, data.get("name") or artist.name),
+            data.get("avatar") or data.get("cover") or "",
+            data.get("briefDesc") or "",
+        )
+
+    async def artist_songs(self, artist: Artist, order: ArtistOrder, page: int = 1) -> SongPage:
+        """Page a server-wide hot or publication-time ordering."""
+        offset = (page - 1) * 30
+        result = await self._request(
+            "/artist/songs", id=artist.id, order=order.value, limit=30, offset=offset
+        )
+        songs = result.get("songs") or []
+        return SongPage(
+            [_track(song) for song in songs],
+            bool(result.get("more")),
+            int(result.get("total", len(songs))),
+            30,
+        )
+
     async def songs(self, playlist: Playlist, page: int = 1) -> SongPage:
         """Page over all track IDs, then preserve their order in song details."""
         if page == 1 or playlist.id not in self._playlist_ids:
@@ -210,12 +246,16 @@ class NetEaseMusic:
             (result.get("tlyric") or {}).get("lyric", ""),
         )
 
-    async def is_liked(self, track: Track) -> bool:
-        """Read the verified account's complete liked-song ID list."""
+    async def liked_ids(self) -> set[str]:
+        """Read the verified account's complete liked IDs as opaque track strings."""
         if not self.logged_in:
             raise ValueError("请先按 L 扫码登录")
         result = await self._request("/likelist", uid=self.user_id)
-        return track.mid in {str(song_id) for song_id in result.get("ids", [])}
+        return {str(song_id) for song_id in result.get("ids", [])}
+
+    async def is_liked(self, track: Track) -> bool:
+        """Report this track's membership in the account's complete liked list."""
+        return track.mid in await self.liked_ids()
 
     async def set_liked(self, track: Track, liked: bool) -> None:
         """Set the like state using Enhanced's string-valued boolean parameter."""

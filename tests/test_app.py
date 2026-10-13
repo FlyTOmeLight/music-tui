@@ -18,6 +18,7 @@ THIRD = Track("c", "下一页", "歌手 C", 90)
 
 
 class Library:
+    account_id = ""
     display_name = "QQ 音乐"
 
     def __init__(self):

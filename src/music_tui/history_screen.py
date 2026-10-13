@@ -71,9 +71,14 @@ class HistoryScreen(Screen[tuple[str, dict] | None]):
             source = entry.record.get("source")
             if source is None:
                 continue
-            key = (
-                ("playlist", str(source["id"])) if isinstance(source, dict) else ("search", source)
-            )
+            if isinstance(source, dict) and "artist" in source:
+                key = ("artist", source["artist"]["id"], source["order"])
+            else:
+                key = (
+                    ("playlist", str(source["id"]))
+                    if isinstance(source, dict)
+                    else ("search", source)
+                )
             if key not in seen:
                 seen.add(key)
                 self.sources.append(entry)
