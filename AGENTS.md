@@ -37,6 +37,8 @@ Keep `main` as the stable integration branch. Use `release-v<major>.<minor>.<pat
 
 Use concise, imperative commit subjects. PRs should describe resulting behavior, link relevant issues, and report checks. Include 80×24 terminal screenshots for layout changes.
 
+After each release, update this machine's global installation with `uv tool install --force <released-wheel>`. Verify `music-tui -v` and `music-tui --version` from outside the checkout match the released version before reporting completion.
+
 ## Credentials & Configuration
 
 QQ credentials remain at `~/.local/share/qqmusic-tui/credential.json`, respecting `XDG_DATA_HOME`. Preserve `0600` permissions. NetEase cookies live at `~/.local/share/music-tui/netease/netease-credential.json` with `0600` permissions. The NetEase API service must run with `ENABLE_GENERAL_UNBLOCK=false`. Keep account data out of commits and fixtures.

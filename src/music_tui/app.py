@@ -7,6 +7,7 @@ import random
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from enum import Enum
+from importlib.metadata import version
 from pathlib import Path
 
 from rich.text import Text
@@ -2348,6 +2349,13 @@ async def run(
 def main() -> None:
     """Start the asynchronous application from the command-line entry point."""
     parser = argparse.ArgumentParser(description="A terminal player for QQ and NetEase Music.")
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"music-tui {version('music-tui')}",
+        help="Show the installed version and exit",
+    )
     parser.add_argument(
         "--source",
         choices=("qq", "netease"),

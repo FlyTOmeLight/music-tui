@@ -30,3 +30,8 @@ assert Path(music_tui.__file__).is_relative_to(Path(sys.prefix)), music_tui.__fi
 print(f"Installed music-tui {installed_version}: {music_tui.__file__}")
 PY
 "$check_directory/venv/bin/music-tui" --help
+for option in -v --version; do
+    reported_version=$("$check_directory/venv/bin/music-tui" "$option")
+    [[ "$reported_version" == "music-tui $expected_version" ]]
+    echo "$reported_version"
+done
