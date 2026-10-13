@@ -37,7 +37,7 @@ Keep `main` as the stable integration branch. Use `release-v<major>.<minor>.<pat
 
 Use concise, imperative commit subjects. PRs should describe resulting behavior, link relevant issues, and report checks. Include 80×24 terminal screenshots for layout changes.
 
-After each release, update this machine's global installation with `uv tool install --force <released-wheel>`. Verify `music-tui -v` and `music-tui --version` from outside the checkout match the released version before reporting completion.
+Every completed update includes publishing a new version and updating this machine's global installation with `uv tool install --force <released-wheel>`. Use the version requested by the user when specified. Verify `music-tui -v` and `music-tui --version` from outside the checkout match the released version before reporting completion.
 
 ## Credentials & Configuration
 
