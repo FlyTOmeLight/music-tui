@@ -47,7 +47,7 @@ from .session import SessionStore
 from .sources import MusicSource
 from .sources.netease_openapi import OfficialAPIError
 from .sources.qqmusic import QQMusic
-from .themes import DAY, GLASS, NIGHT, detect_system_theme
+from .themes import DAY, NIGHT, detect_system_theme
 
 
 def timestamp(seconds: float | None) -> str:
@@ -459,19 +459,6 @@ class MusicApp(App):
     Footer { background: $surface; }
     FooterKey { background: $surface; color: $text-muted; }
     FooterKey > .footer-key--key { background: $surface; color: $accent; }
-    MusicApp.-glass #search, MusicApp.-glass #filter { border: round $border; }
-    MusicApp.-glass #search:focus, MusicApp.-glass #filter:focus { border: round $accent; }
-    MusicApp.-glass #search.-compact, MusicApp.-glass #filter.-compact { border: none; }
-    MusicApp.-glass Footer, MusicApp.-glass FooterKey,
-    MusicApp.-glass FooterKey > .footer-key--key { background: #1b2934; }
-    MusicApp.-glass FooterKey > .footer-key--description {
-        background: #1b2934; color: $text-muted;
-    }
-    MusicApp.-glass .dialog-box, MusicApp.-glass #login-box,
-    MusicApp.-glass #quality-box, MusicApp.-glass #create-box {
-        background: #1b2934;
-        border: round $border;
-    }
     """
     BINDINGS = [
         Binding("f1", "help", "帮助", priority=True),
@@ -483,7 +470,6 @@ class MusicApp(App):
         Binding("f7", "playback", "播放页", priority=True),
         Binding("f8", "history", "最近播放", priority=True),
         Binding("f9", "appearance", "主题", priority=True),
-        Binding("ctrl+f9", "glass_appearance", "玻璃主题", priority=True, show=False),
         Binding("shift+f9", "system_appearance", "跟随系统", priority=True, show=False),
         Binding("ctrl+n", "create_playlist", "新建歌单", priority=True, show=False),
         Binding("a", "enqueue", "下一首播放", show=False),
@@ -523,9 +509,7 @@ class MusicApp(App):
         super().__init__()
         self.register_theme(NIGHT)
         self.register_theme(DAY)
-        self.register_theme(GLASS)
         self.appearance = session_store.theme() if session_store is not None else "system"
-        self._appearance_before_glass = "system"
         self.theme = NIGHT.name if self.appearance == "system" else self.appearance
         self._system_theme_unavailable = False
         self.music = music
@@ -541,11 +525,6 @@ class MusicApp(App):
         self.ready = False
         self.table_width = 0
         self.apply_preferences()
-
-    def watch_theme(self, theme: str) -> None:
-        """Preserve terminal default colors in glass instead of converting them to RGB."""
-        self.ansi_color = theme == GLASS.name
-        self.set_class(theme == GLASS.name, "-glass")
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
         """Provide the row stripe variable used by the registered appearance themes."""
@@ -579,21 +558,6 @@ class MusicApp(App):
         """Restore automatic appearance immediately and persist it for subsequent launches."""
         self.set_appearance("system")
         self.update_system_theme()
-
-    def action_glass_appearance(self) -> None:
-        """Toggle terminal-backed glass and restore the previous appearance preference."""
-        if self.appearance == GLASS.name:
-            appearance = self._appearance_before_glass
-            self.set_appearance(appearance)
-            if appearance == "system":
-                self.apply_theme(NIGHT.name)
-                self.update_system_theme()
-            else:
-                self.apply_theme(appearance)
-        else:
-            self._appearance_before_glass = self.appearance
-            self.set_appearance(GLASS.name)
-            self.apply_theme(GLASS.name)
 
     @work(exclusive=True, group="system-appearance")
     async def update_system_theme(self) -> None:
@@ -2299,11 +2263,7 @@ class MusicApp(App):
         if self.appearance == "system":
             appearance = "系统外观不可用" if self._system_theme_unavailable else "跟随系统"
         else:
-            appearance = {
-                DAY.name: "日间",
-                NIGHT.name: "夜间",
-                GLASS.name: "玻璃",
-            }[self.appearance]
+            appearance = "日间" if self.appearance == DAY.name else "夜间"
         self.query_one("#heading", Static).update(
             f"Music TUI · {self.music.display_name}   {label}   "
             f"{self.quality.label}   {self.repeat_mode.value}   "
