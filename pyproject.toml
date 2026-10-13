@@ -1,10 +1,22 @@
 [project]
 name = "melody-tui"
-version = "0.4.3"
+version = "0.4.4"
 description = "A terminal music player for QQ Music and NetEase Cloud Music"
 readme = "README.md"
 requires-python = ">=3.13"
 license = "GPL-3.0-or-later"
+keywords = [
+  "music", "music-player", "terminal", "tui", "cli", "qqmusic",
+  "netease", "netease-cloud-music", "mpv", "textual", "lyrics",
+]
+classifiers = [
+  "Environment :: Console",
+  "Topic :: Multimedia :: Sound/Audio :: Players",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+]
 dependencies = [
   "cryptography>=50,<51",
   "qrcode[pil]>=8,<9",

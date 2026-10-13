@@ -8,21 +8,25 @@ Music TUI 支持跨页播放、手动待播、同步歌词、音质选择和播�
 
 [日间界面](https://raw.githubusercontent.com/FlyTOmeLight/music-tui/main/docs/tui-day-preview.png) · [歌手详情](https://raw.githubusercontent.com/FlyTOmeLight/music-tui/main/docs/artist-preview.png) · [更新记录](https://github.com/FlyTOmeLight/music-tui/blob/main/CHANGELOG.md)
 
-## 安装
+## 从 PyPI 安装
 
-PyPI 包名为 `melody-tui`，安装后的启动命令为 `music-tui`。
+PyPI 包名为 [`melody-tui`](https://pypi.org/project/melody-tui/)，安装后的启动命令为 `music-tui`。
 
 需要 **Python 3.13+**、[uv](https://docs.astral.sh/uv/) 和 [mpv](https://mpv.io/)。音频由本机 mpv 进程播放。
 
-macOS：
+macOS 先安装 uv 和 mpv：
 
 ```sh
 brew install uv mpv
+```
+
+Linux 请先用系统包管理器安装 mpv，并安装 uv。然后从 PyPI 安装并启动播放器：
+
+```sh
 uv tool install --python 3.13 melody-tui
 music-tui
 ```
 
-Linux 请先用系统包管理器安装 mpv，并安装 uv，再执行上面的 `uv tool install` 命令。
 播放器通过 Unix socket 控制 mpv；当前 CI 验证 Linux 和 macOS。
 
 升级和查看版本：
