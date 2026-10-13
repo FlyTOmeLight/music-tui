@@ -5,13 +5,13 @@ from dataclasses import asdict
 import pytest
 from test_app import FIRST, SECOND, THIRD
 from test_playback_features import FeatureAudio, FeatureLibrary
-from textual.widgets import DataTable, Input, ListView, Static
+from textual.widgets import DataTable, Input, ListView, Static, TabbedContent
 
 from music_tui.app import MusicApp, PlaylistSearch, QualityScreen, RepeatMode
 from music_tui.history_screen import HistoryScreen
 from music_tui.models import Playlist
 from music_tui.playback_screen import PlaybackScreen
-from music_tui.screens import HelpScreen, LyricsScreen, QueueScreen
+from music_tui.screens import HelpScreen, QueuePanel
 from music_tui.session import SessionStore
 
 
@@ -42,8 +42,8 @@ async def test_playback_page_controls_same_audio_and_returns_to_browser(size):
         assert app.query_one("#songs", DataTable).has_focus
 
 
-async def test_playback_modals_return_to_page_and_search_returns_to_browser(tmp_path):
-    """Keep help, lyrics, queue and history stacked over the player, then navigate to search."""
+async def test_playback_tabs_keep_the_page_and_search_returns_to_browser(tmp_path):
+    """Keep lyrics and queue in player tabs, with help as a temporary modal."""
     app = MusicApp(FeatureLibrary(), FeatureAudio(), session_store=SessionStore(tmp_path))
     async with app.run_test(size=(80, 24)) as pilot:
         await app.load_view("original").wait()
@@ -51,17 +51,19 @@ async def test_playback_modals_return_to_page_and_search_returns_to_browser(tmp_
         await pilot.pause()
         page = app.screen
         assert isinstance(page, PlaybackScreen)
-        for key, kind in (
-            ("f1", HelpScreen),
-            ("f3", QueueScreen),
-            ("f4", LyricsScreen),
-            ("f8", HistoryScreen),
-        ):
+        for key, tab in (("f3", "queue"), ("f4", "lyrics")):
             await pilot.press(key)
             await pilot.pause()
-            assert isinstance(app.screen, kind)
-            await pilot.press(key)
             assert app.screen is page
+            assert page.query_one("#playback-tabs", TabbedContent).active == tab
+        await pilot.press("f1")
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("f1")
+        assert app.screen is page
+        await pilot.press("f8")
+        assert isinstance(app.screen, HistoryScreen)
+        await pilot.press("f8")
+        assert app.screen is page
         await pilot.press("/")
         assert not isinstance(app.screen, PlaybackScreen)
         assert app.query_one("#search", Input).has_focus
@@ -76,7 +78,7 @@ async def test_player_ignores_hidden_browser_library_actions_and_switching_dispa
         await app.load_view("original").wait()
         await pilot.press("enter", "f7")
         await pilot.pause()
-        await pilot.press("s", "a", "w")
+        await pilot.press("s", "a")
         await pilot.pause()
         assert not library.writes and not app.pending_tracks
         assert isinstance(app.screen, PlaybackScreen)
@@ -102,7 +104,8 @@ async def test_live_queue_reorders_clears_and_tracks_current_song_without_closin
         await pilot.press("a", "f3")
         await pilot.pause()
         screen = app.screen
-        assert isinstance(screen, QueueScreen)
+        assert isinstance(screen, PlaybackScreen)
+        assert screen.query_one("#playback-tabs", TabbedContent).active == "queue"
         table = screen.query_one("#queue-items", DataTable)
         table.move_cursor(row=1)
         await pilot.press("ctrl+up")
@@ -115,7 +118,7 @@ async def test_live_queue_reorders_clears_and_tracks_current_song_without_closin
         assert [entry.track for entry in app.pending_tracks] == [SECOND]
         await pilot.press("n")
         await pilot.pause()
-        screen.refresh_queue()
+        screen.query_one(QueuePanel).refresh_queue()
         assert app.current == SECOND
         assert "第二首" in str(screen.query_one("#queue-current", Static).render())
         assert app.screen is screen and not app.pending_tracks
@@ -255,7 +258,8 @@ async def test_failed_player_buttons_use_displayed_song_not_hidden_browsing_sele
         await pilot.press("f7", "f4")
         await pilot.pause()
         assert library.lyric_targets == [FIRST]
-        assert isinstance(app.screen, LyricsScreen)
+        assert isinstance(app.screen, PlaybackScreen)
+        assert app.screen.query_one("#playback-tabs", TabbedContent).active == "lyrics"
         await pilot.press("f4", "u")
         await pilot.pause()
         assert library.quality_targets == [FIRST]

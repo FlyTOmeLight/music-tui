@@ -23,6 +23,10 @@ class Quality(Enum):
         return self.value
 
 
+class QualityUnavailableError(ValueError):
+    """The requested audio tier lacks an authorized full track; a lower tier may play."""
+
+
 @dataclass(frozen=True)
 class Track:
     """Song metadata with an opaque source ID and optional QQ media variants."""
@@ -34,6 +38,7 @@ class Track:
     media_mid: str = ""
     song_type: int = 0
     variants: tuple[str, ...] = ()
+    cover_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,8 @@ class Playlist:
     favorite: bool = False
     song_count: int | None = None
     editable: bool = False
+    play_count: int | None = None
+    cover_url: str = ""
 
 
 @dataclass(frozen=True)

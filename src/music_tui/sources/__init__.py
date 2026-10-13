@@ -9,6 +9,7 @@ class MusicSource(Protocol):
     """The library, account, and playback operations consumed by Music TUI."""
 
     display_name: str
+    supports_playlist_creation: bool
 
     @property
     def account_id(self) -> str:
@@ -51,12 +52,16 @@ class MusicSource(Protocol):
         """Add one song to an editable playlist without replacing existing songs."""
         ...
 
+    async def create_playlist(self, title: str) -> Playlist:
+        """Create an account-owned playlist and return its server identity."""
+        ...
+
     async def available_qualities(self, track: Track) -> list[Quality]:
         """List full-track playable tiers in descending quality order."""
         ...
 
     async def stream_url(self, track: Track, quality: Quality) -> str:
-        """Resolve a full-track URL at the requested quality without downgrading."""
+        """Resolve an exact full-track tier; raise QualityUnavailableError if unavailable."""
         ...
 
     async def close(self) -> None:

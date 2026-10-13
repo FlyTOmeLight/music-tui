@@ -351,12 +351,12 @@ async def test_quality_switch_preserves_position_pause_and_applies_to_next_song(
         assert app.query_one("#search", Input).value == "u"
 
 
-async def test_unavailable_quality_keeps_existing_playback_and_actual_quality():
-    """Verify a failed quality change preserves current audio and reports the failure."""
+async def test_quality_lookup_error_keeps_existing_playback_and_actual_quality():
+    """Keep current audio on generic lookup errors, without inferring restrictions from text."""
 
     class QualityLibrary(Library):
         async def stream_url(self, track, quality):
-            """Reject lossless requests while leaving standard playback available."""
+            """Fail the lossless lookup with an ordinary error, leaving standard audio available."""
             if quality == Quality.LOSSLESS:
                 raise ValueError("无损 FLAC 不可用")
             return track.mid

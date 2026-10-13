@@ -7,7 +7,7 @@ import pytest
 from textual.widgets import DataTable
 
 from music_tui.app import MusicApp
-from music_tui.models import LoginState, Playlist, Quality, Track
+from music_tui.models import LoginState, Playlist, Quality, QualityUnavailableError, Track
 from music_tui.sources.netease_official import API, OfficialNetEaseMusic
 from music_tui.sources.netease_openapi import OfficialAPIError
 
@@ -118,7 +118,16 @@ async def test_created_and_followed_playlists_fetch_all_pages(make_music):
             assert endpoint == "playlist/subed/get/v2"
             items, total = ["C", "D"], 2
         return {
-            "records": [{"id": item, "name": item, "trackCount": 10} for item in items],
+            "records": [
+                {
+                    "id": item,
+                    "name": item,
+                    "trackCount": 10,
+                    "playCount": 0 if item == "A" else 1200,
+                    "coverImgUrl": f"https://cover.test/{item}.jpg",
+                }
+                for item in items
+            ],
             "recordCount": total,
         }
 
@@ -126,7 +135,16 @@ async def test_created_and_followed_playlists_fetch_all_pages(make_music):
     with pytest.raises(ValueError, match="登录"):
         await music.playlists()
     music.client.token, music.user_id = "account", "USER"
-    assert [item.id for item in await music.playlists()] == ["A", "B", "C", "D"]
+    playlists = await music.playlists()
+    assert [item.id for item in playlists] == ["A", "B", "C", "D"]
+    assert [item.play_count for item in playlists] == [0, 1200, 1200, 1200]
+    assert [item.editable for item in playlists] == [True, True, True, False]
+    assert [item.cover_url for item in playlists] == [
+        "https://cover.test/A.jpg",
+        "https://cover.test/B.jpg",
+        "https://cover.test/C.jpg",
+        "https://cover.test/D.jpg",
+    ]
     assert [offset for _, offset in calls] == [0, 2, 0]
 
 
@@ -251,7 +269,22 @@ async def test_stream_rejects_denied_preview_and_downgraded_audio(make_music, ch
 
     music = make_music(handler)
     music.client.token = "account"
-    with pytest.raises(ValueError, match="不可用"):
+    with pytest.raises(QualityUnavailableError, match="不可用"):
+        await music.stream_url(Track("ABC123", "Song", "Artist", 180), Quality.LOSSLESS)
+
+
+@pytest.mark.parametrize("code", ["10003", "10004", "300", "1406", "1407", "1408", "500"])
+async def test_stream_error_codes_distinguish_song_permissions_from_api_failures(make_music, code):
+    """Retry only explicit song copyright or membership restrictions, preserving other errors."""
+
+    def handler(endpoint, parameters, token):
+        """Raise a machine-readable official permission, authentication, or API error."""
+        raise OfficialAPIError(code)
+
+    music = make_music(handler)
+    music.client.token = "account"
+    expected = QualityUnavailableError if code in {"10003", "10004"} else OfficialAPIError
+    with pytest.raises(expected):
         await music.stream_url(Track("ABC123", "Song", "Artist", 180), Quality.LOSSLESS)
 
 

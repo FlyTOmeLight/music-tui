@@ -7,7 +7,7 @@ import stat
 import httpx
 import pytest
 
-from music_tui.models import LoginState, Playlist, Quality, Track
+from music_tui.models import LoginState, Playlist, Quality, QualityUnavailableError, Track
 from music_tui.sources.netease import NetEaseMusic
 
 
@@ -177,7 +177,13 @@ async def test_playlists_fetches_all_pages_with_reported_counts(make_music):
                 "code": 200,
                 "more": offset == 0,
                 "playlist": [
-                    {"id": song_id, "name": f"List {song_id}", "trackCount": song_id * 100}
+                    {
+                        "id": song_id,
+                        "name": f"List {song_id}",
+                        "trackCount": song_id * 100,
+                        "playCount": 0 if song_id == 1 else 1200,
+                        "coverImgUrl": f"https://cover.test/{song_id}.jpg",
+                    }
                     for song_id in ids
                 ],
             }
@@ -188,6 +194,12 @@ async def test_playlists_fetches_all_pages_with_reported_counts(make_music):
     result = await music.playlists()
     assert offsets == [0, 2]
     assert [(item.id, item.song_count) for item in result] == [(1, 100), (2, 200), (3, 300)]
+    assert [item.play_count for item in result] == [0, 1200, 1200]
+    assert [item.cover_url for item in result] == [
+        "https://cover.test/1.jpg",
+        "https://cover.test/2.jpg",
+        "https://cover.test/3.jpg",
+    ]
     await music.close()
 
 
@@ -274,8 +286,25 @@ async def test_stream_rejects_denied_preview_missing_and_downgraded_audio(make_m
         return response({"code": 200, "data": [audio]})
 
     music = make_music(handler)
-    with pytest.raises(ValueError, match="不可用"):
+    with pytest.raises(QualityUnavailableError, match="不可用"):
         await music.stream_url(Track("1", "Song", "Artist", 183), Quality.LOSSLESS)
+    await music.close()
+
+
+@pytest.mark.parametrize("code", [301, 500])
+async def test_stream_api_authentication_or_server_failures_do_not_allow_lower_tiers(
+    make_music, code
+):
+    """Leave top-level login and API errors distinct from per-song tier restrictions."""
+
+    def handler(request):
+        """Fail the entire stream lookup before any authorized audio result is returned."""
+        return response({"code": code})
+
+    music = make_music(handler)
+    with pytest.raises(ValueError) as failure:
+        await music.stream_url(Track("1", "Song", "Artist", 183), Quality.LOSSLESS)
+    assert not isinstance(failure.value, QualityUnavailableError)
     await music.close()
 
 

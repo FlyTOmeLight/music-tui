@@ -30,6 +30,9 @@ def qq_music(monkeypatch, tmp_path):
             like_song=AsyncMock(return_value=True),
             unlike_song=AsyncMock(return_value=True),
             add_songs=AsyncMock(return_value=True),
+            create=AsyncMock(
+                return_value=SimpleNamespace(retCode=0, id=10, dirid=301, name="新歌单")
+            ),
         ),
         user=SimpleNamespace(
             get_fav_song=lambda *args, **kwargs: SimpleNamespace(
@@ -87,7 +90,7 @@ async def test_qq_append_uses_owned_directory_and_reports_write_failure(qq_music
         await qq_music.set_liked(TRACK, True)
 
 
-@pytest.mark.parametrize("operation", ["like", "append", "query"])
+@pytest.mark.parametrize("operation", ["like", "append", "query", "create"])
 async def test_library_actions_require_login_without_issuing_requests(qq_music, operation):
     """Reject library actions before SDK requests when account credentials are absent."""
     qq_music.client.credential.musicid = 0
@@ -97,9 +100,12 @@ async def test_library_actions_require_login_without_issuing_requests(qq_music, 
             await qq_music.set_liked(TRACK, True)
         elif operation == "append":
             await qq_music.add_to_playlist(TRACK, EDITABLE)
+        elif operation == "create":
+            await qq_music.create_playlist("新歌单")
         else:
             await qq_music.is_liked(TRACK)
     qq_music.client.song.get_detail.assert_not_awaited()
+    qq_music.client.songlist.create.assert_not_awaited()
 
 
 async def test_readonly_playlist_is_rejected_before_qq_requests(qq_music):
@@ -227,7 +233,7 @@ async def test_enhanced_like_does_not_accept_playlist_specific_response_wrapper(
         await music.close()
 
 
-@pytest.mark.parametrize("operation", ["like", "append", "query", "readonly"])
+@pytest.mark.parametrize("operation", ["like", "append", "query", "readonly", "create"])
 async def test_enhanced_library_guards_do_not_issue_requests(enhanced_music, operation):
     """Block logged-out writes and readonly playlists before any service request."""
 
@@ -248,13 +254,15 @@ async def test_enhanced_library_guards_do_not_issue_requests(enhanced_music, ope
                     await music.set_liked(TRACK, False)
                 elif operation == "append":
                     await music.add_to_playlist(TRACK, EDITABLE)
+                elif operation == "create":
+                    await music.create_playlist("新歌单")
                 else:
                     await music.is_liked(TRACK)
     finally:
         await music.close()
 
 
-@pytest.mark.parametrize("operation", ["lyrics", "is_liked", "set_liked", "add_to_playlist"])
+@pytest.mark.parametrize("operation", ["lyrics", "is_liked", "set_liked", "create_playlist"])
 async def test_official_unsupported_actions_are_explicit_and_never_fallback(
     monkeypatch, tmp_path, operation
 ):
@@ -268,8 +276,137 @@ async def test_official_unsupported_actions_are_explicit_and_never_fallback(
     arguments = (TRACK,)
     if operation == "set_liked":
         arguments += (True,)
-    elif operation == "add_to_playlist":
-        arguments += (EDITABLE,)
+    elif operation == "create_playlist":
+        arguments = ("新歌单",)
     with pytest.raises(ValueError, match="官方模式暂不支持"):
         await getattr(music, operation)(*arguments)
     client.request.assert_not_awaited()
+
+
+async def test_official_append_uses_account_token_and_opaque_ids(monkeypatch, tmp_path):
+    """Send owned playlist and song identities without converting encrypted IDs to numbers."""
+    client = SimpleNamespace(token="test-token", request=AsyncMock(return_value={}))
+    monkeypatch.setattr("music_tui.sources.netease_official.OfficialClient", lambda *args: client)
+    music = OfficialNetEaseMusic(tmp_path, "test", None)
+    music.user_id = "opaque-user"
+    playlist = Playlist("opaque-playlist", "歌单", editable=True)
+    await music.add_to_playlist(Track("opaque-song", "歌曲", "歌手", 180), playlist)
+    client.request.assert_awaited_once_with(
+        "/openapi/music/basic/playlist/song/batch/like",
+        {"playlistId": "opaque-playlist", "songIdList": ["opaque-song"]},
+        token="test-token",
+    )
+
+
+@pytest.mark.parametrize("logged_in", [True, False])
+async def test_official_append_rejects_guest_and_readonly_before_request(
+    monkeypatch, tmp_path, logged_in
+):
+    """Block guests and followed playlists without issuing a signed request."""
+    client = SimpleNamespace(request=AsyncMock())
+    monkeypatch.setattr("music_tui.sources.netease_official.OfficialClient", lambda *args: client)
+    music = OfficialNetEaseMusic(tmp_path, "test", None)
+    if logged_in:
+        music.user_id = "opaque-user"
+    with pytest.raises(ValueError, match="不可编辑" if logged_in else "扫码登录"):
+        await music.add_to_playlist(TRACK, Playlist("opaque-playlist", "歌单"))
+    client.request.assert_not_awaited()
+
+
+async def test_qq_creation_returns_server_name_and_ids(qq_music):
+    """Retain the SDK's server identity and renamed title for subsequent song writes."""
+    playlist = await qq_music.create_playlist("  新歌单  ")
+    assert playlist == Playlist(10, "新歌单", 301, song_count=0, editable=True)
+    qq_music.client.songlist.create.assert_awaited_once_with("新歌单")
+
+
+@pytest.mark.parametrize(
+    "status, playlist_id, directory_id", [(1, 10, 301), (0, 0, 301), (0, 10, 0)]
+)
+async def test_qq_creation_rejects_failed_or_missing_identity(
+    qq_music, status, playlist_id, directory_id
+):
+    """Do not return an editable playlist when QQ rejects creation or omits its IDs."""
+    qq_music.client.songlist.create.return_value = SimpleNamespace(
+        retCode=status, id=playlist_id, dirid=directory_id, name="新歌单"
+    )
+    with pytest.raises(ValueError, match="未能新建"):
+        await qq_music.create_playlist("新歌单")
+
+
+async def test_qq_creation_rejects_empty_name_without_request(qq_music):
+    """Validate a blank playlist title before issuing a write."""
+    with pytest.raises(ValueError, match="请输入歌单名称"):
+        await qq_music.create_playlist("  ")
+    qq_music.client.songlist.create.assert_not_awaited()
+
+
+async def test_enhanced_creation_preserves_server_metadata(enhanced_music):
+    """Create through authenticated POST and return the playlist identity and metadata."""
+
+    def handler(request):
+        """Verify the documented creation parameters and return a created playlist."""
+        body = json.loads(request.content)
+        assert request.method == "POST" and request.url.path == "/playlist/create"
+        assert not request.url.query
+        assert body.pop("cookie") == "MUSIC_U=test"
+        body.pop("timestamp")
+        assert body == {"name": "新歌单", "privacy": "0", "type": "NORMAL"}
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "playlist": {
+                    "id": 10,
+                    "name": "新歌单",
+                    "trackCount": 0,
+                    "playCount": 0,
+                    "coverImgUrl": "https://cover.test/playlist.jpg",
+                },
+            },
+        )
+
+    music = enhanced_music(handler)
+    try:
+        playlist = await music.create_playlist("  新歌单  ")
+        assert playlist == Playlist(
+            10,
+            "新歌单",
+            song_count=0,
+            editable=True,
+            play_count=0,
+            cover_url="https://cover.test/playlist.jpg",
+        )
+    finally:
+        await music.close()
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [({"code": 403}, "403"), ({"code": 200}, "未返回新建歌单信息")],
+)
+async def test_enhanced_creation_rejects_failure_or_missing_identity(
+    enhanced_music, payload, message
+):
+    """Do not announce playlist creation when the service rejects or omits its result."""
+    music = enhanced_music(lambda request: httpx.Response(200, json=payload))
+    try:
+        with pytest.raises(ValueError, match=message):
+            await music.create_playlist("新歌单")
+    finally:
+        await music.close()
+
+
+async def test_enhanced_creation_rejects_blank_name_without_request(enhanced_music):
+    """Reject an empty title before sending a remote mutation."""
+
+    def handler(request):
+        """Fail if the invalid title reaches the HTTP transport."""
+        pytest.fail("Unexpected create request")
+
+    music = enhanced_music(handler)
+    try:
+        with pytest.raises(ValueError, match="请输入歌单名称"):
+            await music.create_playlist("  ")
+    finally:
+        await music.close()

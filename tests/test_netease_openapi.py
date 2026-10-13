@@ -141,6 +141,34 @@ async def test_invalid_response_is_rejected(make_client, payload):
         await client.close()
 
 
+@pytest.mark.parametrize(
+    "payload, success",
+    [
+        ({"code": 200, "data": True}, True),
+        ({"code": 200, "data": []}, True),
+        ({"code": 200, "data": False}, False),
+        ({"code": 200, "data": {}}, False),
+        ({"code": 200, "data": ["unexpected"]}, False),
+        ({"code": 200}, False),
+        ({"code": 403, "data": True}, False),
+        ({"code": 200, "subCode": 300, "data": True}, False),
+    ],
+)
+async def test_playlist_add_accepts_only_documented_business_success(make_client, payload, success):
+    """Accept fresh and duplicate appends only after top-level and subcode validation."""
+    client = make_client(lambda request: httpx.Response(200, json=payload))
+    try:
+        endpoint = "/openapi/music/basic/playlist/song/batch/like"
+        business = {"playlistId": "opaque-playlist", "songIdList": ["opaque-song"]}
+        if success:
+            assert await client.request(endpoint, business, token="test-token") == {}
+        else:
+            with pytest.raises(ValueError):
+                await client.request(endpoint, business, token="test-token")
+    finally:
+        await client.close()
+
+
 async def test_token_storage_permissions_and_restore(make_client, monkeypatch):
     """Persist an account atomically and restore only while its lifetime remains valid."""
     monkeypatch.setattr("music_tui.sources.netease_openapi.time.time", lambda: 1000)

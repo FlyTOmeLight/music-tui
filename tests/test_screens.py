@@ -1,4 +1,4 @@
-"""Exercise standalone music dialogs with keyboard input and literal user content."""
+"""Exercise inline listening panels and dialogs with literal song and lyric content."""
 
 import pytest
 from textual.app import App, ComposeResult
@@ -8,10 +8,10 @@ from textual.widgets import DataTable, Input, Label, Static
 from music_tui.models import LyricLine, Lyrics, Playlist, Track
 from music_tui.screens import (
     HelpScreen,
-    LyricsScreen,
+    LyricsPanel,
     PlaylistPickerScreen,
     QueueItem,
-    QueueScreen,
+    QueuePanel,
     QueueState,
 )
 
@@ -37,17 +37,12 @@ class ScreenHarness(App):
 
 
 @pytest.mark.parametrize("size", [(80, 24), (48, 16)])
-@pytest.mark.parametrize("dialog_name", ["help", "queue", "lyrics", "playlist"])
+@pytest.mark.parametrize("dialog_name", ["help", "playlist"])
 async def test_dialog_controls_fit_and_escape_restores_focus(size, dialog_name):
     """Keep closing instructions inside compact terminals and restore the previous focus."""
     app = ScreenHarness()
     dialogs = {
         "help": HelpScreen(),
-        "queue": QueueScreen(
-            lambda: QueueState(FIRST, (QueueItem(object(), SECOND),), (FIRST,), True, "歌单"),
-            lambda operation, key: None,
-        ),
-        "lyrics": LyricsScreen(FIRST, Lyrics(), lambda: 0),
         "playlist": PlaylistPickerScreen([Playlist(1, "歌单", editable=True)]),
     }
     async with app.run_test(size=size) as pilot:
@@ -97,10 +92,11 @@ async def test_queue_delete_uses_manual_identity_and_stays_open():
         pending[:] = [item for item in pending if item.key is not key]
 
     async with app.run_test(size=(80, 24)) as pilot:
-        dialog = QueueScreen(state, edit)
-        app.push_screen(dialog)
+        dialog = QueuePanel(state, edit)
+        await app.screen.mount(dialog)
         await pilot.pause()
         table = dialog.query_one(DataTable)
+        table.focus()
         assert table.get_row_at(0)[1].plain == FIRST.title
         assert "[red]歌单[/red]" in str(dialog.query_one("#queue-source", Static).render())
         await pilot.press("down", "down", "delete")
@@ -108,7 +104,7 @@ async def test_queue_delete_uses_manual_identity_and_stays_open():
         assert calls == []
         await pilot.press("up", "delete")
         await pilot.pause()
-        assert app.screen is dialog
+        assert dialog.is_mounted
         assert calls == [("remove", second)]
         assert table.row_count == 2
 
@@ -135,10 +131,11 @@ async def test_queue_reorder_and_clear_keep_focus_and_selection():
             pending[index], pending[target] = pending[target], pending[index]
 
     async with app.run_test(size=(80, 24)) as pilot:
-        dialog = QueueScreen(state, edit)
-        app.push_screen(dialog)
+        dialog = QueuePanel(state, edit)
+        await app.screen.mount(dialog)
         await pilot.pause()
         table = dialog.query_one(DataTable)
+        table.focus()
         await pilot.press("down", "ctrl+up")
         await pilot.pause()
         assert dialog.selected_key() is second
@@ -149,7 +146,7 @@ async def test_queue_reorder_and_clear_keep_focus_and_selection():
         assert table.cursor_row == 1
         await pilot.press("ctrl+delete")
         await pilot.pause()
-        assert app.screen is dialog
+        assert dialog.is_mounted
         assert app.focused is table
         assert table.row_count == 1
         assert calls == [("up", second), ("down", second), ("clear", None)]
@@ -168,9 +165,10 @@ async def test_queue_updates_when_playback_consumes_a_manual_entry():
         return QueueState(current[0], tuple(pending), (), False, "来源")
 
     async with app.run_test(size=(80, 24)) as pilot:
-        dialog = QueueScreen(state, lambda operation, key: calls.append((operation, key)))
-        app.push_screen(dialog)
+        dialog = QueuePanel(state, lambda operation, key: calls.append((operation, key)))
+        await app.screen.mount(dialog)
         await pilot.pause()
+        dialog.query_one(DataTable).focus()
         await pilot.press("down")
         pending.pop(0)
         current[0] = SECOND
@@ -194,8 +192,8 @@ async def test_queue_edit_uses_rendered_identity_before_timer_refresh():
         return QueueState(FIRST, tuple(pending), (), False, "来源")
 
     async with app.run_test(size=(80, 24)) as pilot:
-        dialog = QueueScreen(state, lambda operation, key: calls.append((operation, key)))
-        app.push_screen(dialog)
+        dialog = QueuePanel(state, lambda operation, key: calls.append((operation, key)))
+        await app.screen.mount(dialog)
         await pilot.pause()
         pending.pop(0)
         dialog.action_edit("remove")
@@ -219,21 +217,15 @@ async def test_picker_filters_readonly_playlists_and_returns_selection():
         assert results == [writable]
 
 
-@pytest.mark.parametrize("dialog_name", ["queue", "playlist"])
-async def test_empty_queue_and_picker_remain_closable(dialog_name):
-    """Handle absent tracks and writable destinations without accidental selection."""
+async def test_empty_picker_remains_closable():
+    """Handle absent writable destinations without accidental selection."""
     app = ScreenHarness()
     results = []
-    dialog = (
-        QueueScreen(lambda: QueueState(None, (), (), False, ""), lambda operation, key: None)
-        if dialog_name == "queue"
-        else PlaylistPickerScreen([])
-    )
+    dialog = PlaylistPickerScreen([])
     async with app.run_test(size=(80, 24)) as pilot:
         app.push_screen(dialog, results.append)
         await pilot.pause()
-        await pilot.press("delete", "enter")
-        await pilot.pause()
+        await pilot.press("enter")
         assert app.screen is dialog
         await pilot.press("escape")
         await pilot.pause()
@@ -251,8 +243,10 @@ async def test_lyrics_follow_position_forward_and_backward_with_literal_text():
     )
     app = ScreenHarness()
     async with app.run_test(size=(80, 24)) as pilot:
-        dialog = LyricsScreen(FIRST, lyrics, lambda: position[0])
-        app.push_screen(dialog)
+        dialog = LyricsPanel(lambda: position[0])
+        await app.screen.mount(dialog)
+        await dialog.show_lyrics(FIRST, lyrics)
+        dialog.query_one("#lyrics-body", VerticalScroll).focus()
         await pilot.pause()
         assert dialog.active_line == 0
         await pilot.press("right", "left")
@@ -275,8 +269,9 @@ async def test_plain_lyrics_show_unsynced_message_without_highlighting():
     """Allow untimed lyrics to be read without treating every line as simultaneous."""
     app = ScreenHarness()
     async with app.run_test(size=(80, 24)) as pilot:
-        dialog = LyricsScreen(FIRST, Lyrics((LyricLine(0, "正文"),), synced=False), lambda: 30)
-        app.push_screen(dialog)
+        dialog = LyricsPanel(lambda: 30)
+        await app.screen.mount(dialog)
+        await dialog.show_lyrics(FIRST, Lyrics((LyricLine(0, "正文"),), synced=False))
         await pilot.pause()
         assert dialog.active_line == -1
         assert not dialog.query_one("#lyric-0", Static).has_class("lyric-current")

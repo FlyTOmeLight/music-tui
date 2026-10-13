@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from ..models import LoginState, Lyrics, Playlist, Quality, SongPage, Track
+from ..models import LoginState, Lyrics, Playlist, Quality, QualityUnavailableError, SongPage, Track
 from .lyrics import parse_lyrics
 
 LEVELS = {
@@ -33,6 +33,7 @@ def _track(song: dict) -> Track:
         song["name"],
         " / ".join(artist["name"] for artist in song.get("ar", [])),
         int(song.get("dt", 0)) // 1000,
+        cover_url=(song.get("al") or {}).get("picUrl") or "",
     )
 
 
@@ -40,6 +41,7 @@ class NetEaseMusic:
     """Keep account cookies and library access separate from the interface."""
 
     display_name = "网易云音乐（Enhanced）"
+    supports_playlist_creation = True
 
     def __init__(self, directory: Path, api_url: str = "http://127.0.0.1:3000"):
         """Use a service with ENABLE_GENERAL_UNBLOCK explicitly disabled."""
@@ -157,6 +159,8 @@ class NetEaseMusic:
                     favorite=item.get("specialType") == 5,
                     song_count=item.get("trackCount"),
                     editable=str((item.get("creator") or {}).get("userId")) == self.account_id,
+                    play_count=item.get("playCount"),
+                    cover_url=item.get("coverImgUrl") or "",
                 )
                 for item in items
             )
@@ -229,6 +233,26 @@ class NetEaseMusic:
         await self._request("/playlist/tracks", op="add", pid=playlist.id, tracks=track.mid)
         self._playlist_ids.pop(playlist.id, None)
 
+    async def create_playlist(self, title: str) -> Playlist:
+        """Create a normal public playlist using the verified account's cookies."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        title = title.strip()
+        if not title:
+            raise ValueError("请输入歌单名称")
+        result = await self._request("/playlist/create", name=title, privacy="0", type="NORMAL")
+        item = result.get("playlist") or {}
+        if not item.get("id"):
+            raise ValueError("网易云未返回新建歌单信息，请刷新歌单列表")
+        return Playlist(
+            int(item["id"]),
+            item.get("name") or title,
+            song_count=item.get("trackCount", 0),
+            editable=True,
+            play_count=item.get("playCount"),
+            cover_url=item.get("coverImgUrl") or "",
+        )
+
     async def _audio(self, track: Track, quality: Quality) -> dict | None:
         """Reject missing, downgraded, or preview-only stream responses."""
         level = LEVELS[quality]
@@ -252,10 +276,10 @@ class NetEaseMusic:
         return [quality for quality, audio in zip(Quality, results, strict=True) if audio]
 
     async def stream_url(self, track: Track, quality: Quality) -> str:
-        """Resolve the selected full-length stream without quality downgrades."""
+        """Resolve the exact full tier, distinguishing unavailable audio from request errors."""
         audio = await self._audio(track, quality)
         if not audio:
-            raise ValueError(f"此歌曲的{quality.label}不可用，请检查会员权限或按 U 更换音质")
+            raise QualityUnavailableError(f"此歌曲的{quality.label}不可用，请检查音源和会员权限")
         return audio["url"]
 
     async def close(self) -> None:
