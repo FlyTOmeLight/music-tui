@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 from test_app import Audio, Library
-from textual.widgets import DataTable, Input, ListView, Static
+from textual.widgets import Button, DataTable, Input, ListView, Static
 
 from music_tui.app import MusicApp, RepeatMode
 from music_tui.models import Playlist, Quality, SongPage, Track
@@ -177,6 +177,8 @@ async def test_selector_enter_changes_platform_and_offers_login_for_unsaved_acco
         assert not app.account_logged_in
         assert not app.playlists and not app.tracks
         assert app.query_one(DataTable).row_count == 0
+        assert app.query_one("#previous-page", Button).disabled
+        assert app.query_one("#next-page", Button).disabled
         assert "未登录" in str(app.query_one("#heading", Static).render())
         assert original.closed == 1
 

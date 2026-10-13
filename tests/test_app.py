@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import qrcode
 from terminal_qrcode import SimpleImage
-from textual.widgets import DataTable, Input, ListView, Static
+from textual.widgets import Button, DataTable, Footer, Input, ListView, Static
 
 from music_tui.app import LoginScreen, MusicApp, QualityScreen, RepeatMode
 from music_tui.models import LoginState, Playlist, Quality, SongPage, Track
@@ -406,6 +406,66 @@ async def test_quality_menu_only_shows_current_song_authorized_formats():
         await pilot.pause()
         assert not isinstance(app.screen, QualityScreen)
         assert "暂无可用播放地址" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.parametrize("size", [(80, 24), (112, 32), (48, 16)])
+async def test_browse_controls_fit_without_repeated_playback_hints(size):
+    """Keep paging controls visible and avoid duplicating the footer's playback hints."""
+    app = MusicApp(Library(), Audio())
+    async with app.run_test(size=size) as pilot:
+        await app.load_view(Playlist(1, "歌单")).wait()
+        await pilot.pause()
+        detail = app.query_one("#playback-detail", Static)
+        status = app.query_one("#status", Static)
+        footer = app.query_one(Footer)
+        assert "Space" not in str(detail.render())
+        assert "Enter" not in str(status.render())
+        assert detail.region.bottom <= status.region.y < footer.region.y
+        songs = app.query_one("#songs-box")
+        for selector in ("#previous-page", "#next-page"):
+            button = app.query_one(selector, Button)
+            assert button.region.height == 1
+            assert songs.region.contains_region(button.region)
+            assert button.region.bottom <= app.query_one("#player-box").region.y
+        assert app.query_one(DataTable).region.height >= 1
+
+
+async def test_visible_pagination_controls_keep_playback_and_show_page_limits():
+    """Page through visible buttons without replacing the active playback queue."""
+    app = MusicApp(Library(), Audio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view("test").wait()
+        await pilot.press("enter")
+        await pilot.pause()
+        previous = app.query_one("#previous-page", Button)
+        following = app.query_one("#next-page", Button)
+        assert previous.disabled and not following.disabled
+        assert "[" in str(previous.label) and "]" in str(following.label)
+        await pilot.click("#next-page")
+        await app.workers.wait_for_complete()
+        assert app.page == 2 and app.tracks == [THIRD]
+        assert app.current == FIRST and app.queue == [FIRST, SECOND]
+        assert not previous.disabled and following.disabled
+        await pilot.click("#previous-page")
+        await app.workers.wait_for_complete()
+        assert app.page == 1 and app.tracks == [FIRST, SECOND]
+        assert previous.disabled and not following.disabled
+
+
+async def test_bracket_pagination_works_after_leaving_text_entry():
+    """Allow bracket text in search, then page with separate bracket keys after Escape."""
+    app = MusicApp(Library(), Audio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view("test").wait()
+        await pilot.press("/", "[", "]")
+        assert app.query_one("#search", Input).value == "[]"
+        assert app.page == 1
+        await pilot.press("escape", "]")
+        await app.workers.wait_for_complete()
+        assert app.page == 2 and app.tracks == [THIRD]
+        await pilot.press("[")
+        await app.workers.wait_for_complete()
+        assert app.page == 1 and app.tracks == [FIRST, SECOND]
 
 
 async def test_pagination_replaces_rows_and_keeps_playback_queue():

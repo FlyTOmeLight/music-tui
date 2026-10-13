@@ -435,12 +435,21 @@ class MusicApp(App):
     #sort-order:focus { background: $block-cursor-background; color: $accent; text-style: bold; }
     #filter { height: 3; border: tall $border; background: $background; }
     #filter:focus { border: tall $accent; }
+    #search.-compact, #filter.-compact { height: 1; border: none; background: $surface; }
     #songs { height: 1fr; background: transparent; }
     #songs > .datatable--header { background: $surface; color: $text-muted; }
     #songs > .datatable--even-row { background: $background; }
     #songs > .datatable--odd-row { background: $music-row; }
     #songs > .datatable--cursor { background: $surface; }
     #songs:focus > .datatable--cursor { background: $block-cursor-background; color: $foreground; }
+    #pagination { height: 1; }
+    #pagination Button {
+        width: 1fr; min-width: 11; height: 1; border: none; padding: 0 1;
+        background: $surface; color: $text-muted;
+    }
+    #pagination Button:focus {
+        background: $block-cursor-background; color: $accent; text-style: bold;
+    }
     #player-box { height: 3; padding: 0 2; border-top: solid $border; background: $surface; }
     #now-playing { height: 1; text-overflow: ellipsis; color: $accent; text-style: bold; }
     #playback-detail { height: 1; text-overflow: ellipsis; color: $text-muted; }
@@ -592,7 +601,7 @@ class MusicApp(App):
         self.manual_current: QueuedTrack | None = None
         self.failed_request: tuple[int, int] | None = None
         self.library_busy = False
-        self.last_status_message = "F7 播放页 · F8 最近播放 · F1 帮助"
+        self.last_status_message = "按 L 扫码登录以读取个人歌单"
         self.session_saved_at = 0.0
         self.loading = False
         self.now_playing_text = "尚未播放"
@@ -723,16 +732,31 @@ class MusicApp(App):
             with Vertical(id="songs-box"):
                 yield Static("选择歌单，或搜索一首歌", id="view-title", markup=False)
                 with Horizontal(id="view-toolbar"):
-                    yield Static("/ 搜索 · L 登录", id="view-meta", markup=False)
+                    yield Static("尚未加载列表", id="view-meta", markup=False)
                     yield Button("O 本页：原序", id="sort-order")
                 field = Input(placeholder="F 歌单内搜索歌名或歌手，回车筛选", id="filter")
                 field.display = False
                 yield field
                 yield SongTable(id="songs", cursor_type="row", zebra_stripes=True)
+                with Horizontal(id="pagination"):
+                    yield Button(
+                        "[ 上一页",
+                        id="previous-page",
+                        compact=True,
+                        disabled=True,
+                        tooltip="按 [ 或在歌曲列表按 PageUp，查看上一页",
+                    )
+                    yield Button(
+                        "下一页 ]",
+                        id="next-page",
+                        compact=True,
+                        disabled=True,
+                        tooltip="按 ] 或在歌曲列表按 PageDown，查看下一页",
+                    )
         with Vertical(id="player-box"):
             yield Static("尚未播放", id="now-playing", markup=False)
-            yield Static("Enter 播放 · Space 暂停 · P/N 切歌", id="playback-detail", markup=False)
-        yield Static("F2 切换平台 · L 扫码登录 · / 搜索 · Tab 切换区域", id="status", markup=False)
+            yield Static("选中歌曲后按 Enter 播放", id="playback-detail", markup=False)
+        yield Static(self.last_status_message, id="status", markup=False)
         yield Footer(compact=True)
 
     def on_mount(self) -> None:
@@ -756,8 +780,10 @@ class MusicApp(App):
             self.call_after_refresh(self.resize_columns)
 
     def resize_columns(self) -> None:
-        """Fit song and artist columns to the available table width."""
+        """Fit song columns and compact text fields so short terminals retain usable rows."""
         table = self.query_one("#songs", DataTable)
+        for selector in ("#search", "#filter"):
+            self.query_one(selector, Input).set_class(self.size.height < 20, "-compact")
         width = table.size.width
         if width == self.table_width or width < 20:
             return
@@ -884,7 +910,8 @@ class MusicApp(App):
             await self.draw_playlists()
             self.query_one("#songs", DataTable).clear()
             self.query_one("#view-title", Static).update("选择歌单，或搜索一首歌")
-            self.query_one("#view-meta", Static).update("Enter 播放   [ / ] 翻页")
+            self.query_one("#view-meta", Static).update("尚未加载列表")
+            self.sync_pagination()
             self.update_heading()
             self.status(f"已切换到 {self.music.display_name} · L 登录 · / 搜索 · F2 切换平台")
             if logged_in:
@@ -948,7 +975,8 @@ class MusicApp(App):
                     field.value = ""
                     field.display = False
                     self.query_one("#view-title", Static).update("选择歌单，或搜索一首歌")
-                    self.query_one("#view-meta", Static).update("Enter 播放   [ / ] 翻页")
+                    self.query_one("#view-meta", Static).update("尚未加载列表")
+                    self.sync_pagination()
                 finally:
                     self.switching = False
             self.account_logged_in = True
@@ -1037,7 +1065,7 @@ class MusicApp(App):
         self.query_one("#songs", DataTable).move_cursor(row=0)
         self.query_one("#songs", DataTable).focus()
         self.status(
-            "Enter 播放 · F 歌单内搜索 · [/] 翻页 · R 播放方式"
+            ""
             if result.tracks
             else (
                 "没有找到歌曲；清空搜索框并回车可返回完整歌单"
@@ -1269,6 +1297,22 @@ class MusicApp(App):
         pages = max(1, (self.total + self.page_size - 1) // self.page_size)
         self.query_one("#view-title", Static).update(title)
         self.query_one("#view-meta", Static).update(f"{count}  第 {self.page} 页/{pages}")
+        self.sync_pagination()
+
+    def sync_pagination(self) -> None:
+        """Disable unavailable page directions after loading or clearing a browsing source."""
+        self.query_one("#previous-page", Button).disabled = self.source is None or self.page <= 1
+        self.query_one("#next-page", Button).disabled = self.source is None or not self.has_more
+
+    @on(Button.Pressed, "#previous-page")
+    def previous_page(self) -> None:
+        """Use the visible previous-page button to navigate the browsing list."""
+        self.action_previous_page()
+
+    @on(Button.Pressed, "#next-page")
+    def next_page(self) -> None:
+        """Use the visible next-page button to navigate the browsing list."""
+        self.action_next_page()
 
     @on(DataTable.HeaderSelected, "#songs")
     def sort_header(self, event: DataTable.HeaderSelected) -> None:
@@ -1539,7 +1583,7 @@ class MusicApp(App):
             detail.append(f" {timestamp(duration)}   音量 {volume}%")
         else:
             title = "正在加载…" if self.loading else "尚未播放"
-            detail = Text("Enter 播放 · Space 暂停 · P/N 切歌")
+            detail = Text("选中歌曲后按 Enter 播放")
         message = f"{title}\n{detail.plain}"
         if message != self.now_playing_text:
             self.now_playing_text = message
