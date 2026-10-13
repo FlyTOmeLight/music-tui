@@ -259,16 +259,18 @@ async def test_missing_song_detail_is_visible_and_retry_returns_complete_page(ma
 
 
 @pytest.mark.parametrize(
-    "changes",
+    "changes, reason",
     [
-        {"code": 403},
-        {"url": None},
-        {"freeTrialInfo": {"start": 0, "end": 30}},
-        {"level": "standard"},
-        {"id": 999},
+        ({"code": 403}, "结果码 403"),
+        ({"url": None}, "未提供播放地址"),
+        ({"freeTrialInfo": {"start": 0, "end": 30}}, "仅提供试听"),
+        ({"level": "standard"}, "返回音质与请求不符"),
+        ({"id": 999}, "未返回此歌曲的音源"),
     ],
 )
-async def test_stream_rejects_denied_preview_missing_and_downgraded_audio(make_music, changes):
+async def test_stream_rejects_denied_preview_missing_and_downgraded_audio(
+    make_music, changes, reason
+):
     """The chosen quality never resolves to denied, preview, or lower-quality audio."""
 
     def handler(request):
@@ -286,8 +288,10 @@ async def test_stream_rejects_denied_preview_missing_and_downgraded_audio(make_m
         return response({"code": 200, "data": [audio]})
 
     music = make_music(handler)
-    with pytest.raises(QualityUnavailableError, match="不可用"):
+    with pytest.raises(QualityUnavailableError, match=reason) as failure:
         await music.stream_url(Track("1", "Song", "Artist", 183), Quality.LOSSLESS)
+    assert "会员" not in str(failure.value)
+    assert "https://" not in str(failure.value)
     await music.close()
 
 

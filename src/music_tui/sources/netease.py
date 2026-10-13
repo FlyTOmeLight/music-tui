@@ -253,33 +253,46 @@ class NetEaseMusic:
             cover_url=item.get("coverImgUrl") or "",
         )
 
-    async def _audio(self, track: Track, quality: Quality) -> dict | None:
+    async def _audio(self, track: Track, quality: Quality) -> dict:
         """Reject missing, downgraded, or preview-only stream responses."""
         level = LEVELS[quality]
         result = await self._request("/song/url/v1", id=track.mid, level=level, unblock="false")
         audio = next(
             (item for item in result.get("data", []) if str(item.get("id")) == track.mid), None
         )
-        if (
-            audio
-            and audio.get("code") == 200
-            and audio.get("url")
-            and audio.get("level") == level
-            and audio.get("freeTrialInfo") is None
-        ):
+        if audio is None:
+            reason = "未返回此歌曲的音源"
+        elif audio.get("code") != 200:
+            code = audio.get("code")
+            result_code = code if isinstance(code, int) else "未知"
+            reason = f"结果码 {result_code}：未提供可用音源"
+        elif audio.get("freeTrialInfo") is not None:
+            reason = "仅提供试听，无法完整播放"
+        elif not audio.get("url"):
+            reason = "未提供播放地址"
+        elif audio.get("level") != level:
+            reason = "返回音质与请求不符"
+        else:
             return audio
-        return None
+        raise QualityUnavailableError(f"网易云{quality.label}不可用：{reason}")
 
     async def available_qualities(self, track: Track) -> list[Quality]:
         """Offer only exact quality levels authorized by NetEase for this account."""
-        results = await asyncio.gather(*(self._audio(track, quality) for quality in Quality))
-        return [quality for quality, audio in zip(Quality, results, strict=True) if audio]
+
+        async def available(quality: Quality) -> bool:
+            """Exclude unavailable tiers while preserving request and login failures."""
+            try:
+                await self._audio(track, quality)
+            except QualityUnavailableError:
+                return False
+            return True
+
+        results = await asyncio.gather(*(available(quality) for quality in Quality))
+        return [quality for quality, allowed in zip(Quality, results, strict=True) if allowed]
 
     async def stream_url(self, track: Track, quality: Quality) -> str:
-        """Resolve the exact full tier, distinguishing unavailable audio from request errors."""
+        """Resolve the exact full tier, preserving the source's failure reason."""
         audio = await self._audio(track, quality)
-        if not audio:
-            raise QualityUnavailableError(f"此歌曲的{quality.label}不可用，请检查音源和会员权限")
         return audio["url"]
 
     async def close(self) -> None:

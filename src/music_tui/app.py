@@ -226,7 +226,6 @@ class PlatformScreen(ModalScreen[str | None]):
     OPTIONS = [
         ("qq", "QQ 音乐"),
         ("netease-enhanced", "网易云音乐 · Enhanced（推荐）"),
-        ("netease-official", "网易云音乐 · 官方 API（可选）"),
     ]
     DEFAULT_CSS = """
     PlatformScreen { align: center middle; background: $background 95%; }
@@ -239,7 +238,7 @@ class PlatformScreen(ModalScreen[str | None]):
         border: solid $accent;
         padding: 1 2;
     }
-    #platform-options { height: 9; margin: 1 0; }
+    #platform-options { height: 6; margin: 1 0; }
     #platform-box > Static:first-child { color: $accent; text-style: bold; }
     #platform-help { height: auto; color: $text-muted; }
     #platform-options { background: transparent; }
@@ -256,17 +255,20 @@ class PlatformScreen(ModalScreen[str | None]):
         self.selected = selected
 
     def compose(self) -> ComposeResult:
-        """Put the recommended third-party backend first among NetEase choices."""
+        """Offer supported UI entry points without changing CLI-selected backends."""
+        selected_index = next(
+            (index for index, (key, _) in enumerate(self.OPTIONS) if key == self.selected),
+            None,
+        )
         with Vertical(id="platform-box"):
             yield Static("切换音乐平台")
             yield ListView(
                 *(ListItem(Label(label, markup=False)) for _, label in self.OPTIONS),
-                initial_index=[key for key, _ in self.OPTIONS].index(self.selected),
+                initial_index=selected_index,
                 id="platform-options",
             )
             yield Static(
                 "Enhanced：运行 --setup-netease 配置服务。\n"
-                "官方：仅适用于已取得应用授权和设备参数的用户。\n"
                 "切换后停止播放并清空队列，保留各平台登录凭证。\n"
                 "↑/↓ 选择 · Enter 确认 · Esc 返回",
                 id="platform-help",

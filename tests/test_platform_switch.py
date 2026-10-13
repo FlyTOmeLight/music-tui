@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 from test_app import Audio, Library
-from textual.widgets import Button, DataTable, Input, ListView, Static
+from textual.widgets import Button, DataTable, Input, Label, ListView, Static
 
 from music_tui.app import MusicApp, RepeatMode
 from music_tui.models import Playlist, Quality, SongPage, Track
@@ -146,7 +146,11 @@ async def test_f2_opens_selector_from_search_and_escape_or_current_selection_is_
         await pilot.press("/", "a", "f2")
         assert isinstance(app.screen, PlatformScreen)
         choices = app.screen.query_one("#platform-options", ListView)
-        assert len(choices.children) == 3
+        assert len(choices.children) == 2
+        assert [str(label.render()) for label in choices.query(Label)] == [
+            "QQ 音乐",
+            "网易云音乐 · Enhanced（推荐）",
+        ]
         assert choices.region.bottom <= 24
         await pilot.press("escape")
         assert not isinstance(app.screen, PlatformScreen)
@@ -154,6 +158,24 @@ async def test_f2_opens_selector_from_search_and_escape_or_current_selection_is_
         assert app.music is original
         await app.switch_platform("qq").wait()
         assert requested == [] and original.closed == 0
+
+
+async def test_official_cli_session_can_open_and_cancel_platform_selector():
+    """Hide the official option while preserving a CLI-selected session on cancel."""
+    original = PlatformLibrary("netease-official")
+    app = MusicApp(original, Audio(), source_key="netease-official")
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("f2")
+        choices = app.screen.query_one("#platform-options", ListView)
+        assert len(choices.children) == 2
+        assert choices.index is None
+        assert "官方" not in str(app.screen.query_one("#platform-help", Static).render())
+        await pilot.press("escape")
+        assert app.music is original
+        assert app.source_key == "netease-official"
+        await pilot.press("f2", "down")
+        assert app.screen.query_one("#platform-options", ListView).index == 0
 
 
 async def test_selector_enter_changes_platform_and_offers_login_for_unsaved_account():
