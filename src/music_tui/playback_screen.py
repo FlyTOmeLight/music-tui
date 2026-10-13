@@ -323,7 +323,7 @@ class PlaybackScreen(Screen):
             ("quality", state.track is None),
             ("add_to_playlist", state.track is None or not state.can_add_to_playlist),
             ("create_playlist", not state.can_create_playlist),
-            ("retry", state.track is None),
+            ("retry", state.track is None and state.ready),
         ):
             button = self.query_one(f"#playback-{name}", Button)
             if button.disabled != disabled:

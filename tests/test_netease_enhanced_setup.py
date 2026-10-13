@@ -11,6 +11,23 @@ import pytest
 from music_tui import netease_enhanced_setup as setup
 
 
+def loaded_job_output(port=3000, **changes):
+    """Describe loaded execution settings independently of the on-disk plist."""
+    job = setup._service_configuration(port)
+    job.update(changes)
+    arguments = "\n".join(f"\t\t{argument}" for argument in job["ProgramArguments"])
+    environment = "\n".join(
+        f"\t\t{key} => {value}" for key, value in job["EnvironmentVariables"].items()
+    )
+    return (
+        f"gui/501/{setup.SERVICE_LABEL} = {{\n"
+        f"\targuments = {{\n{arguments}\n\t}}\n"
+        f"\tworking directory = {job['WorkingDirectory']}\n"
+        f"\tenvironment = {{\n{environment}\n\t}}\n"
+        "}\n"
+    )
+
+
 @pytest.fixture
 def environment(tmp_path, monkeypatch):
     """Keep saved configuration isolated and provide usable Node prerequisites."""
@@ -202,7 +219,11 @@ def test_occupied_port_never_starts_child(environment, monkeypatch, enhanced):
 
 def test_repeat_start_does_not_register_second_job(environment, monkeypatch):
     """Reuse a healthy managed job without touching its process or configuration."""
-    monkeypatch.setattr(setup, "_launchctl", lambda *args: subprocess.CompletedProcess(args, 0))
+    monkeypatch.setattr(
+        setup,
+        "_launchctl",
+        lambda *args: subprocess.CompletedProcess(args, 0, loaded_job_output()),
+    )
     monkeypatch.setattr(setup, "_is_enhanced", lambda url: True)
     monkeypatch.setattr(setup, "_write_service", lambda port: pytest.fail("duplicate registration"))
     assert setup.run_service() == 0
@@ -226,14 +247,22 @@ def test_stop_unregisters_only_managed_job(environment, monkeypatch, loaded):
 @pytest.mark.parametrize("healthy", [True, False])
 def test_status_distinguishes_registration_and_api_readiness(environment, monkeypatch, healthy):
     """Report API readiness separately from the registered restart policy."""
-    monkeypatch.setattr(setup, "_launchctl", lambda *args: subprocess.CompletedProcess(args, 0))
+    monkeypatch.setattr(
+        setup,
+        "_launchctl",
+        lambda *args: subprocess.CompletedProcess(args, 0, loaded_job_output()),
+    )
     monkeypatch.setattr(setup, "_is_enhanced", lambda url: healthy)
     assert setup.run_service("status") == (0 if healthy else 1)
 
 
 def test_unready_service_reports_log_without_claiming_success(environment, monkeypatch, capsys):
     """Keep a slow-starting job registered but report that the API is not ready."""
-    monkeypatch.setattr(setup, "_launchctl", lambda *args: subprocess.CompletedProcess(args, 0))
+    monkeypatch.setattr(
+        setup,
+        "_launchctl",
+        lambda *args: subprocess.CompletedProcess(args, 0, loaded_job_output()),
+    )
     monkeypatch.setattr(setup, "_is_enhanced", lambda url: False)
     clock = iter([0, 31])
     monkeypatch.setattr(setup.time, "monotonic", lambda: next(clock))
@@ -264,3 +293,92 @@ def test_defaults_only_prints_allowed_fields(environment, capsys):
     assert capsys.readouterr().out == "true\n"
     with pytest.raises(ValueError):
         setup.defaults(environment, "port")
+
+
+@pytest.mark.parametrize("change", ["port", "arguments", "environment", "directory"])
+def test_start_replaces_changed_loaded_configuration(environment, monkeypatch, change):
+    """Replace stale loaded settings even when the saved plist is already current."""
+    monkeypatch.setattr(setup.shutil, "which", lambda name: "/opt/node/bin/" + name)
+    monkeypatch.setattr(setup, "load_enhanced_config", lambda: {"apiUrl": "http://127.0.0.1:4567"})
+    path = setup._write_service(4567)
+    desired = plistlib.loads(path.read_bytes())
+    changes = {}
+    old_port = 4567
+    if change == "port":
+        old_port = 3000
+    elif change == "arguments":
+        changes["ProgramArguments"] = ["/old/bin/npx", "--yes", "old-package"]
+    elif change == "environment":
+        changes["EnvironmentVariables"] = {
+            **desired["EnvironmentVariables"],
+            "ENABLE_PROXY": "true",
+        }
+    else:
+        changes["WorkingDirectory"] = "/old/config"
+    calls = []
+    loaded = True
+
+    def launchctl(*command):
+        """Model launchd's loaded job separately from the mutable plist file."""
+        nonlocal loaded
+        calls.append(command)
+        if command[0] == "print":
+            return subprocess.CompletedProcess(command, 0, loaded_job_output(old_port, **changes))
+        if command[0] == "bootout":
+            loaded = False
+        elif command[0] == "bootstrap":
+            loaded = True
+            assert plistlib.loads(path.read_bytes()) == desired
+        return subprocess.CompletedProcess(command, 0)
+
+    def port_available(port):
+        """Make the old service retain its port until bootout finishes."""
+        assert port == 4567
+        return not loaded
+
+    monkeypatch.setattr(setup, "_launchctl", launchctl)
+    monkeypatch.setattr(setup, "_port_available", port_available)
+    monkeypatch.setattr(setup, "_is_enhanced", lambda url: loaded)
+    assert setup.run_service() == 0
+    target = f"gui/{setup.os.getuid()}/{setup.SERVICE_LABEL}"
+    assert calls == [
+        ("print", target),
+        ("bootout", "--wait", target),
+        ("bootstrap", f"gui/{setup.os.getuid()}", str(path.resolve())),
+    ]
+
+
+def test_changed_service_stop_failure_preserves_saved_job(environment, monkeypatch, capsys):
+    """Do not replace the plist or register another job when stopping fails."""
+    path = setup._write_service(3000)
+    original = path.read_bytes()
+    monkeypatch.setattr(setup, "load_enhanced_config", lambda: {"apiUrl": "http://127.0.0.1:4567"})
+    calls = []
+
+    def launchctl(*command):
+        """Reject bootout while reporting an old loaded configuration."""
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command, 1 if command[0] == "bootout" else 0, loaded_job_output()
+        )
+
+    monkeypatch.setattr(setup, "_launchctl", launchctl)
+    assert setup.run_service() == 1
+    assert [call[0] for call in calls] == ["print", "bootout"]
+    assert path.read_bytes() == original
+    assert "停止旧服务失败" in capsys.readouterr().err
+
+
+def test_unknown_loaded_configuration_requires_explicit_stop(environment, monkeypatch, capsys):
+    """Avoid changing a running job when launchctl output cannot be recognized."""
+    calls = []
+
+    def launchctl(*command):
+        """Supply an unsupported output format and record attempted operations."""
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "unknown format")
+
+    monkeypatch.setattr(setup, "_launchctl", launchctl)
+    assert setup.run_service() == 1
+    assert [call[0] for call in calls] == ["print"]
+    assert "无法读取已注册后台服务的运行配置" in capsys.readouterr().err

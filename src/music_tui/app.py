@@ -606,6 +606,7 @@ class MusicApp(App):
         self.last_status_message = "按 L 扫码登录以读取个人歌单"
         self.session_saved_at = 0.0
         self.loading = False
+        self.deferred_player_events: list[dict] = []
         self.now_playing_text = "尚未播放"
         self.quality = Quality.STANDARD
         self.current_quality: Quality | None = None
@@ -1514,18 +1515,20 @@ class MusicApp(App):
     @work(exclusive=True, group="play")
     async def action_retry(self) -> None:
         """Retry the failed queue operation, rebuilding mpv when its connection is lost."""
-        if self.playback_track is None and self.failed_request is None:
+        if self.ready and self.playback_track is None and self.failed_request is None:
             self.status("没有可重试的歌曲")
             return
         self.loading = True
         try:
             if not self.ready:
                 await self.player.close()
+                self.deferred_player_events.clear()
                 while not self.player.events.empty():
                     self.player.events.get_nowait()
                 await self.player.start()
                 self.ready = True
                 await self.player.command("set_property", "volume", self.playback_volume)
+                self.status("播放器已恢复，请选择歌曲播放")
             if self.failed_request is not None:
                 index, shuffle = self.failed_request
                 if index != self.index or shuffle:
@@ -1543,9 +1546,17 @@ class MusicApp(App):
         if not self.is_running or self.switching:
             return
         self.remember_playback()
+        events = [] if self.loading else self.deferred_player_events
+        if not self.loading:
+            self.deferred_player_events = []
         while not self.player.events.empty():
             event = self.player.events.get_nowait()
-            if event.get("event") == "end-file" and not self.loading:
+            if event.get("event") == "end-file" and self.loading:
+                self.deferred_player_events.append(event)
+            else:
+                events.append(event)
+        for event in events:
+            if event.get("event") == "end-file":
                 if event.get("playlist_entry_id") != self.player.entry_id:
                     continue
                 if event.get("reason") == "eof" and self.current:

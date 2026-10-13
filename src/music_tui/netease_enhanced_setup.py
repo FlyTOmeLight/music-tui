@@ -171,17 +171,11 @@ def _launchctl(*arguments: str) -> subprocess.CompletedProcess:
     )
 
 
-def _write_service(port: int) -> Path:
-    """Save a private launchd job with automatic restart and private output logs."""
+def _service_configuration(port: int) -> dict:
+    """Build the desired launchd configuration without changing the saved job."""
     directory = config_directory().resolve()
-    directory.mkdir(parents=True, exist_ok=True)
     log = directory / "enhanced-service.log"
-    descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        os.fchmod(descriptor, 0o600)
-    finally:
-        os.close(descriptor)
-    job = {
+    return {
         "Label": SERVICE_LABEL,
         "ProgramArguments": [shutil.which("npx"), "--yes", PACKAGE],
         "WorkingDirectory": str(directory),
@@ -198,6 +192,44 @@ def _write_service(port: int) -> Path:
         "StandardOutPath": str(log),
         "StandardErrorPath": str(log),
     }
+
+
+def _loaded_service_matches(output: str, job: dict) -> bool:
+    """Compare loaded launchd execution settings, rejecting unrecognized output."""
+    arguments = re.search(r"^\s*arguments = \{\n(.*?)^\s*\}", output, re.MULTILINE | re.DOTALL)
+    environment = re.search(r"^\s*environment = \{\n(.*?)^\s*\}", output, re.MULTILINE | re.DOTALL)
+    directory = re.search(r"^\s*working directory = (.+)$", output, re.MULTILINE)
+    if arguments is None or environment is None or directory is None:
+        raise ValueError(
+            "无法读取已注册后台服务的运行配置，请先运行 --netease-service-stop，再重新启动。"
+        )
+    loaded_arguments = [line.strip() for line in arguments[1].splitlines() if line.strip()]
+    loaded_environment = {}
+    for line in environment[1].splitlines():
+        key, separator, value = line.strip().partition(" => ")
+        if separator:
+            loaded_environment[key] = value
+    return (
+        loaded_arguments == job["ProgramArguments"]
+        and directory[1].strip() == job["WorkingDirectory"]
+        and all(
+            loaded_environment.get(key) == value
+            for key, value in job["EnvironmentVariables"].items()
+        )
+    )
+
+
+def _write_service(port: int) -> Path:
+    """Save a private launchd job with automatic restart and private output logs."""
+    job = _service_configuration(port)
+    directory = Path(job["WorkingDirectory"])
+    directory.mkdir(parents=True, exist_ok=True)
+    log = directory / "enhanced-service.log"
+    descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+    finally:
+        os.close(descriptor)
     path = directory / "enhanced-service.plist"
     descriptor, temporary = tempfile.mkstemp(dir=directory, prefix=".enhanced-service-")
     try:
@@ -216,7 +248,8 @@ def run_service(action: str = "start") -> int:
             raise ValueError("后台服务目前支持 macOS；其他系统请按配置指南手动运行 npx。")
         domain = f"gui/{os.getuid()}"
         target = f"{domain}/{SERVICE_LABEL}"
-        loaded = _launchctl("print", target).returncode == 0
+        registered = _launchctl("print", target)
+        loaded = registered.returncode == 0
         log = config_directory().resolve() / "enhanced-service.log"
         if action == "stop":
             if loaded and _launchctl("bootout", target).returncode:
@@ -237,6 +270,16 @@ def run_service(action: str = "start") -> int:
         port = _local_port(url)
         if port is None:
             raise ValueError("当前配置使用已有 API 服务，无需启动本机服务。")
+        ready, message = _node_status()
+        if not ready:
+            raise ValueError(message)
+        changed = loaded and not _loaded_service_matches(
+            registered.stdout or "", _service_configuration(port)
+        )
+        if changed:
+            if _launchctl("bootout", "--wait", target).returncode:
+                raise ValueError("更新后台服务配置前停止旧服务失败，请检查 launchctl。")
+            loaded = False
         if not loaded:
             if not _port_available(port):
                 if _is_enhanced(url):
@@ -245,9 +288,6 @@ def run_service(action: str = "start") -> int:
                         "请先停止原服务，再运行 --netease-service。"
                     )
                 raise ValueError("配置的端口已被其他服务占用，请重跑 music-tui --setup-netease。")
-            ready, message = _node_status()
-            if not ready:
-                raise ValueError(message)
             path = _write_service(port)
             if _launchctl("bootstrap", domain, str(path)).returncode:
                 raise ValueError("注册网易云后台服务失败，请检查 launchctl 和当前桌面登录会话。")

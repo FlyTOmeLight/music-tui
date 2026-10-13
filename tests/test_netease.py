@@ -1,5 +1,6 @@
 """Exercise NetEase login, library paging, and stream permissions without network access."""
 
+import asyncio
 import base64
 import json
 import stat
@@ -486,4 +487,143 @@ async def test_qr_success_without_new_credentials_does_not_reuse_cookie_jar(make
             _ = [state async for state in session]
         assert not music.logged_in and not music.credential_path.exists()
     finally:
+        await music.close()
+
+
+@pytest.mark.parametrize("failure", ["missing-cookie", "account", "save", "expired"])
+async def test_failed_relogin_preserves_active_account(make_music, monkeypatch, failure):
+    """A failed QR attempt preserves active credentials, HTTP cookies and library cache."""
+
+    def handler(request):
+        """Issue new HTTP cookies even when the login cannot be committed."""
+        if request.url.path == "/login/qr/check":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 800 if failure == "expired" else 803,
+                    "cookie": "__csrf=token" if failure == "missing-cookie" else "MUSIC_U=new",
+                },
+                headers={
+                    "Set-Cookie": (
+                        "__csrf=token; Path=/"
+                        if failure == "missing-cookie"
+                        else "MUSIC_U=new; Path=/"
+                    )
+                },
+            )
+        assert request.url.path == "/user/account"
+        assert json.loads(request.content)["cookie"] == "MUSIC_U=new"
+        assert music.cookie == "MUSIC_U=old" and music.user_id == 7
+        assert music.client.cookies.get("MUSIC_U") == "old"
+        return response({"code": 200, "account": None if failure == "account" else {"id": 8}})
+
+    def fail_save(candidate):
+        """Simulate a failed atomic credential write after successful verification."""
+        raise OSError("credential write failed")
+
+    music = make_music(handler)
+    music.cookie = "MUSIC_U=old"
+    music.user_id = 7
+    music.client.cookies.set("MUSIC_U", "old", domain="api.test", path="/")
+    music._playlist_ids[10] = [1, 2]
+    music._save_cookie()
+    previous = music.credential_path.read_bytes()
+    if failure == "save":
+        monkeypatch.setattr(NetEaseMusic, "_save_cookie", fail_save)
+    session = music.login_session()
+    session.key = "new-key"
+    try:
+        if failure == "expired":
+            assert [state async for state in session] == [LoginState.EXPIRED]
+        else:
+            with pytest.raises(OSError if failure == "save" else ValueError):
+                _ = [state async for state in session]
+        assert music.cookie == "MUSIC_U=old" and music.user_id == 7
+        assert list(music.client.cookies.items()) == [("MUSIC_U", "old")]
+        assert music._playlist_ids == {10: [1, 2]}
+        assert music.credential_path.read_bytes() == previous
+    finally:
+        await music.close()
+
+
+async def test_relogin_commits_verified_account_and_replaces_old_http_cookies(make_music):
+    """Successful replacement publishes the verified account and clears old library data."""
+
+    def handler(request):
+        """Verify the candidate without changing the old account before persistence."""
+        if request.url.path == "/login/qr/check":
+            assert "old" not in request.headers.get("cookie", "")
+            return httpx.Response(
+                200,
+                json={"code": 803},
+                headers={"Set-Cookie": "MUSIC_U=new; Path=/"},
+            )
+        assert request.url.path == "/user/account"
+        assert json.loads(request.content)["cookie"] == "MUSIC_U=new"
+        assert music.cookie == "MUSIC_U=old" and music.user_id == 7
+        return response({"code": 200, "account": {"id": 8}})
+
+    music = make_music(handler)
+    music.cookie = "MUSIC_U=old"
+    music.user_id = 7
+    music.client.cookies.set("MUSIC_U", "old", domain="api.test", path="/")
+    music._playlist_ids[10] = [1, 2]
+    session = music.login_session()
+    session.key = "new-key"
+    try:
+        assert [state async for state in session] == [LoginState.DONE]
+        assert music.cookie == "MUSIC_U=new" and music.user_id == 8
+        assert list(music.client.cookies.items()) == [("MUSIC_U", "new")]
+        assert music._playlist_ids == {}
+        assert json.loads(music.credential_path.read_text()) == {"cookie": "MUSIC_U=new"}
+    finally:
+        await music.close()
+
+
+async def test_cancelled_relogin_keeps_old_account_available(make_music):
+    """Cancelling verification leaves concurrent library requests on the previous account."""
+    verification_started = asyncio.Event()
+    release_verification = asyncio.Event()
+
+    async def handler(request):
+        """Block verification while allowing an ordinary old-account library request."""
+        if request.url.path == "/login/qr/check":
+            return httpx.Response(
+                200,
+                json={"code": 803},
+                headers={"Set-Cookie": "MUSIC_U=new; Path=/"},
+            )
+        if request.url.path == "/user/account":
+            verification_started.set()
+            await release_verification.wait()
+            return response({"code": 200, "account": {"id": 8}})
+        assert request.url.path == "/user/playlist"
+        payload = json.loads(request.content)
+        assert payload["cookie"] == "MUSIC_U=old" and payload["uid"] == 7
+        assert request.headers["cookie"] == "MUSIC_U=old"
+        return response({"code": 200, "playlist": []})
+
+    music = make_music(handler)
+    music.cookie = "MUSIC_U=old"
+    music.user_id = 7
+    music.client.cookies.set("MUSIC_U", "old", domain="api.test", path="/")
+    music._save_cookie()
+    session = music.login_session()
+    session.key = "new-key"
+    iterator = aiter(session)
+    task = asyncio.create_task(anext(iterator))
+    try:
+        async with asyncio.timeout(2):
+            await verification_started.wait()
+            assert await music.playlists() == []
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert music.cookie == "MUSIC_U=old" and music.user_id == 7
+        assert list(music.client.cookies.items()) == [("MUSIC_U", "old")]
+        assert json.loads(music.credential_path.read_text()) == {"cookie": "MUSIC_U=old"}
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await iterator.aclose()
         await music.close()
