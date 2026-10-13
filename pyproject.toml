@@ -1,6 +1,6 @@
 [project]
 name = "music-tui"
-version = "0.3.4"
+version = "0.3.5"
 description = "A terminal music player for QQ Music and NetEase Cloud Music"
 requires-python = ">=3.13"
 license = "GPL-3.0-or-later"

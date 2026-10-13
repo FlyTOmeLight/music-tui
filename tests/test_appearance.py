@@ -14,6 +14,75 @@ from music_tui.playback_screen import PlaybackScreen
 from music_tui.session import SessionStore
 
 
+@pytest.mark.parametrize("appearance", ["music-night", "music-day", "system"])
+async def test_glass_toggle_preserves_playback_and_restores_appearance(
+    tmp_path, monkeypatch, appearance
+):
+    """Toggle glass from any appearance without changing selection, search or playback."""
+
+    async def detect():
+        """Return a deterministic desktop appearance when automatic mode resumes."""
+        return "music-day"
+
+    monkeypatch.setattr("music_tui.app.detect_system_theme", detect)
+    store = SessionStore(tmp_path)
+    store.save_theme(appearance)
+    app = MusicApp(FeatureLibrary(), FeatureAudio(), session_store=store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.update_system_theme().wait()
+        await app.load_view("original").wait()
+        await pilot.press("enter")
+        await pilot.pause()
+        app.query_one("#songs", DataTable).move_cursor(row=1)
+        selected, queue, loaded = app.selected_track(), list(app.queue), list(app.player.loaded)
+        await pilot.press("/")
+        app.query_one("#search", Input).value = "未提交的搜索"
+        await pilot.press("ctrl+f9")
+        await pilot.pause()
+        assert app.theme == store.theme() == "music-glass"
+        assert app.screen.styles.background == Color.parse("ansi_default")
+        assert app.current == FIRST and app.queue == queue and app.player.loaded == loaded
+        assert app.selected_track() == selected
+        assert app.query_one("#search", Input).value == "未提交的搜索"
+        await app.update_system_theme().wait()
+        assert app.theme == "music-glass"
+        await pilot.press("ctrl+f9")
+        await app.update_system_theme().wait()
+        await pilot.pause()
+        assert app.appearance == store.theme() == appearance
+        assert app.theme == ("music-day" if appearance == "system" else appearance)
+        assert not app.has_class("-glass")
+
+
+async def test_saved_glass_uses_terminal_background_across_pages(tmp_path, monkeypatch):
+    """Restore glass, keep pages transparent and dialogs readable, and allow leaving glass."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    store = SessionStore(tmp_path)
+    store.save_theme("music-glass")
+    app = MusicApp(FeatureLibrary(), FeatureAudio(), session_store=SessionStore(tmp_path))
+    async with app.run_test(size=(80, 24)) as pilot:
+        assert app.theme == "music-glass" and app.has_class("-glass")
+        await app.load_view("original").wait()
+        await pilot.pause()
+        footer = app.screen._compositor.render_strips()[-1]
+        for segment in footer:
+            if segment.text.strip():
+                assert segment.style.color != segment.style.bgcolor
+        for key in ("f7", "f8"):
+            await pilot.press(key)
+            await pilot.pause()
+            assert app.screen.styles.background == Color.parse("ansi_default")
+            background = next(iter(app.screen._compositor.render_strips()[-1])).style.bgcolor
+            assert background.is_default
+        await pilot.press("f1")
+        await pilot.pause()
+        assert app.screen.query_one(".dialog-box").styles.background == Color.parse("#1b2934")
+        await pilot.press("f9")
+        await pilot.pause()
+        assert app.theme == store.theme() == "music-night"
+        assert not app.has_class("-glass")
+
+
 @pytest.mark.parametrize("theme", [None, "music-day"])
 async def test_system_appearance_result_during_shutdown_does_not_update_removed_widgets(
     monkeypatch, theme
