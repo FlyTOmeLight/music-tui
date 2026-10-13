@@ -26,7 +26,7 @@ Textual 的开发配置同时声明 Black、pytest 和 pytest-asyncio，并把�
 src/music_tui/
 ├── __init__.py
 ├── app.py           # 应用入口、界面协调、账号切换与播放命令
-├── playback_queue.py   # 队列分页、手动待播、随机历史及加载事件管理
+├── playback_queue.py   # 队列导航、手动待播优先级与编辑、只读视图及加载事件管理
 ├── playback_session.py # 播放快照类型、编解码与恢复前校验
 ├── models.py        # 歌曲、歌单、分页、音质和登录状态
 ├── player.py        # mpv 生命周期与通信
@@ -46,6 +46,9 @@ pyproject.toml
 不引入插件发现或注册表。两平台的账号目录独立。
 
 队列导航由 `PlaybackQueue` 集中持有，界面浏览和播放队列各自独立。
+原列表与手动待播的优先级、返回位置、身份编辑和失败导航重试也由队列管理；
+界面使用只读视图和导航结果，不直接修改队列字段或随机历史。队列规则通过该
+interface 测试，界面测试保留快捷键、播放事件、存储与异步协作。
 `PlaybackSnapshot` 保留现有 JSON 格式，在恢复之前完成数据校验；`app.py` 协调
 账号、播放器和界面，不再自行维护分页导航与快照解码规则。
 

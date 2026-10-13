@@ -172,7 +172,7 @@ async def test_qq_cdn_missing_files_downgrade_without_hiding_other_failures(
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         app.quality = Quality.HIRES
-        app.playback_queue.tracks = [Track("song", "歌曲", "歌手", 120, "base")]
+        app.playback_queue.replace([Track("song", "歌曲", "歌手", 120, "base")], None, 1, False, 0)
         await app.play_index(0).wait()
         if code in (404, 410):
             assert requested == ["RS01", "F000"]

@@ -134,7 +134,9 @@ async def test_playback_permission_failure_is_visible_and_does_not_auto_skip():
     """Verify denied playback displays an error without starting the next track."""
     app = MusicApp(Library(), Audio())
     async with app.run_test() as pilot:
-        app.playback_queue.tracks = [Track("denied", "会员歌曲", "歌手", 200), FIRST]
+        app.playback_queue.replace(
+            [Track("denied", "会员歌曲", "歌手", 200), FIRST], None, 1, False, 0
+        )
         app.play_index(0)
         await pilot.pause()
         assert app.current is None
@@ -328,7 +330,7 @@ async def test_quality_switch_preserves_position_pause_and_applies_to_next_song(
     player = Audio()
     app = MusicApp(QualityLibrary(), player)
     async with app.run_test(size=(80, 24)) as pilot:
-        app.playback_queue.tracks = [FIRST, SECOND]
+        app.playback_queue.replace([FIRST, SECOND], None, 1, False, 0)
         app.play_index(0)
         await pilot.pause()
         player.properties.update({"time-pos": 42, "pause": True})
@@ -365,7 +367,7 @@ async def test_quality_lookup_error_keeps_existing_playback_and_actual_quality()
     player = Audio()
     app = MusicApp(QualityLibrary(), player)
     async with app.run_test(size=(80, 24)) as pilot:
-        app.playback_queue.tracks = [FIRST]
+        app.playback_queue.replace([FIRST], None, 1, False, 0)
         app.play_index(0)
         await pilot.pause()
         commands_before = len(player.commands)
@@ -445,7 +447,10 @@ async def test_visible_pagination_controls_keep_playback_and_show_page_limits():
         await pilot.click("#next-page")
         await app.workers.wait_for_complete()
         assert app.page == 2 and app.tracks == [THIRD]
-        assert app.current == FIRST and app.playback_queue.tracks == [FIRST, SECOND]
+        assert app.current == FIRST and app.playback_queue.view(app.repeat_mode).tracks == (
+            FIRST,
+            SECOND,
+        )
         assert not previous.disabled and following.disabled
         await pilot.click("#previous-page")
         await app.workers.wait_for_complete()
@@ -619,7 +624,7 @@ async def test_random_plays_all_pages_without_repeats_and_preserves_history():
         await pilot.press("n")
         await pilot.pause()
         assert app.source == Playlist(1, "其他歌单")
-        assert app.playback_queue.source == "test"
+        assert app.playback_queue.view(app.repeat_mode).source == "test"
 
 
 async def test_random_single_song_replays_and_search_input_keeps_r():

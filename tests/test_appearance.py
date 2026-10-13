@@ -85,7 +85,9 @@ async def test_delayed_system_appearance_failure_preserves_playback_error(monkey
     async with app.run_test(size=(80, 24)) as pilot:
         async with asyncio.timeout(2):
             await started.wait()
-        app.playback_queue.tracks = [Track("denied", "会员歌曲", "歌手", 200), FIRST]
+        app.playback_queue.replace(
+            [Track("denied", "会员歌曲", "歌手", 200), FIRST], None, 1, False, 0
+        )
         await app.play_index(0).wait()
         assert "暂无播放权限" in app.last_status_message
         release.set()
@@ -111,14 +113,14 @@ async def test_theme_restores_and_switches_without_changing_playback(tmp_path, t
         table.move_cursor(row=1)
         app.action_sort()
         selected = app.selected_track()
-        queue = list(app.playback_queue.tracks)
+        queue = list(app.playback_queue.view(app.repeat_mode).tracks)
         loaded = list(app.player.loaded)
         await pilot.press("f9")
         await pilot.pause()
         assert app.theme != theme and store.theme() == app.theme
         assert (
             app.current == FIRST
-            and app.playback_queue.tracks == queue
+            and app.playback_queue.view(app.repeat_mode).tracks == tuple(queue)
             and app.player.loaded == loaded
         )
         assert app.selected_track() == selected
