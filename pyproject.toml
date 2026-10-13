@@ -1,7 +1,8 @@
 [project]
 name = "music-tui"
-version = "0.4.1"
+version = "0.4.2"
 description = "A terminal music player for QQ Music and NetEase Cloud Music"
+readme = "README.md"
 requires-python = ">=3.13"
 license = "GPL-3.0-or-later"
 dependencies = [
@@ -12,6 +13,11 @@ dependencies = [
   "textual>=6,<7",
   "terminal-qrcode>=1.1,<2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/FlyTOmeLight/music-tui"
+Issues = "https://github.com/FlyTOmeLight/music-tui/issues"
+Changelog = "https://github.com/FlyTOmeLight/music-tui/blob/main/CHANGELOG.md"
 
 [project.scripts]
 music-tui = "music_tui.app:main"

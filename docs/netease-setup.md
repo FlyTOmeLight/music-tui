@@ -150,13 +150,12 @@ uv run music-tui --netease-backend official --setup-netease
 ### 使用官方方式
 
 ```sh
-uv run music-tui
+uv run music-tui --source netease --netease-backend official
 ```
 
-按 `F2` 选择网易云官方，再按 `l`，用网易云音乐手机 App 扫码并确认。
+官方接入只通过命令行进入，不在 `F2` 平台菜单中显示。按 `l`，用网易云音乐手机 App 扫码并确认。
 向导只完成应用配置；扫码才会登录听歌账号。成功后会显示个人歌单。
-需要直接进入网易云时，执行 `uv run music-tui --source netease --netease-backend official`。
-配置修改后需重新启动 Music TUI；日常在界面内切换平台即可。
+配置修改后需重新启动 Music TUI；后续无参数启动会沿用上次的平台，`F2` 可切换到 QQ 或 Enhanced。
 
 官方登录状态保存在 `~/.local/share/music-tui/netease-official/token.json`，支持 `XDG_DATA_HOME`。
 令牌过期后按 `l` 重新扫码。真实官方扫码和会员音源仍需获批应用凭证验证。
@@ -170,7 +169,7 @@ uv run music-tui
 export NETEASE_APP_ID="应用详情中的 appId"
 export NETEASE_PRIVATE_KEY_FILE="$HOME/.config/music-tui/netease-private-key.pem"
 export NETEASE_DEVICE_FILE="$HOME/.config/music-tui/netease-device.json"
-uv run music-tui
+uv run music-tui --source netease --netease-backend official
 ```
 
 私钥文件支持完整 PEM 或纯 Base64 内容。设备文件为 JSON 对象，包含

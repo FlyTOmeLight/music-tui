@@ -1,284 +1,237 @@
 # Music TUI
 
-一个终端音乐播放器，支持 QQ 音乐和网易云音乐。左侧歌单及歌曲总数，右侧歌曲，底部当前歌曲与播放进度。
+在终端里听 QQ 音乐和网易云音乐。扫码登录自己的账号，浏览歌单、搜索歌曲和歌手，用键盘或鼠标控制播放。
 
-```sh
-music-tui
-```
+Music TUI 支持跨页播放、手动待播、同步歌词、音质选择和播放会话恢复。浏览其他列表时，当前音乐会继续播放。
 
-运行 `music-tui -v` 或 `music-tui --version` 查看当前安装版本。
+![Music TUI 夜间界面](https://raw.githubusercontent.com/FlyTOmeLight/music-tui/main/docs/tui-preview.png)
 
-首次使用默认进入 QQ 音乐，之后沿用上次的平台；`--source` 可明确指定平台。
-在界面内按 `F2`，选择 QQ 音乐或网易云 Enhanced，无需退出。
-首次使用按 `l`，用当前平台的手机 App 扫码并确认。二维码直接显示在终端内。
-登录页适配常见的 80 列 × 24 行终端。登录成功后读取当前账号的歌单。QQ 音乐包含「我喜欢」、自建及收藏歌单。
-登录凭证保存在本机，后续启动会检查登录状态。网易云官方令牌过期后需重新扫码。
+[日间界面](https://raw.githubusercontent.com/FlyTOmeLight/music-tui/main/docs/tui-day-preview.png) · [歌手详情](https://raw.githubusercontent.com/FlyTOmeLight/music-tui/main/docs/artist-preview.png) · [更新记录](https://github.com/FlyTOmeLight/music-tui/blob/main/CHANGELOG.md)
 
-| 按键 | 操作 |
-| --- | --- |
-| `F1` | 打开快捷键帮助 |
-| `F2` | 打开平台菜单，切换 QQ / 网易云 Enhanced |
-| `F3` | 查看待播队列；队列内 `Delete` 删除手动待播歌曲 |
-| `F4` | 查看当前歌曲的同步歌词；未播放时查看选中歌曲 |
-| `F5` | 重试原来的失败歌曲；mpv 退出时重建播放器 |
-| `F6` | 继续当前账号上次保存的播放会话 |
-| `F7` | 打开 / 关闭独立播放页 |
-| `F8` | 查看最近播放；`Tab` 切换最近歌曲 / 来源，`o` 打开来源 |
-| `F9` / `Shift+F9` | 手动切换日间 / 夜间；恢复跟随系统 |
-| `a` | 将选中歌曲加入手动待播，优先于原列表后续歌曲播放 |
-| `s` | 喜欢 / 取消喜欢选中歌曲（QQ、网易云 Enhanced） |
-| `w` | 将选中歌曲加入已有可写歌单（QQ、网易云 Enhanced） |
-| `g` | 返回当前播放来源，并定位当前歌曲 |
-| `i` | 查看选中歌曲的歌手；合唱时选择歌手，播放页使用当前歌曲 |
-| `Ctrl+R` | 刷新当前列表；歌单内筛选会重新读取完整歌单 |
-| `l` | 扫码登录 |
-| `/` | 聚焦全站搜索框，输入后回车搜索 |
-| `f` | 聚焦歌单内搜索框，输入歌名或歌手后回车筛选 |
-| `Tab` / `Shift+Tab` | 切换搜索、歌单、歌曲区域 |
-| `↑` / `↓` | 选择歌单或歌曲 |
-| `Enter` | 打开歌单、播放选中歌曲 |
-| `Space` | 暂停 / 继续 |
-| `n` / `p` | 下一首 / 上一首 |
-| `←` / `→` | 后退 / 前进 5 秒 |
-| `-` / `+`（或 `=`） | 调整音量 |
-| `[` / `]`（英文方括号，分别按） | 上一页 / 下一页 |
-| `PageUp` / `PageDown` | 歌曲区域中上一页 / 下一页 |
-| `r` | 切换顺序播放 / 列表循环 / 单曲循环 / 随机播放 |
-| `u` | 选择播放音质 |
-| `Esc` | 从搜索返回歌曲；关闭登录页 |
-| `q` / `Ctrl+C` | 退出并停止播放 |
+## 安装
 
-登录页用 `r` 刷新过期的二维码。搜索框中可以正常输入空格和上述字母快捷键。
-歌曲区域显示接口返回的歌曲总数、当前页 / 总页数和本页歌曲数。翻页会替换本页内容。
-歌曲列表下方的「[ 上一页」「下一页 ]」可直接点击；第一页和最后一页会禁用对应按钮。
-键盘翻页时先按 `Esc` 聚焦歌曲列表，再按 `[` / `]` 或 `PageUp` / `PageDown`。
-翻页入口示例：[日间](docs/browse-pagination-day.png)、[夜间](docs/browse-pagination-night.png)。
-打开歌单后按 `f` 搜索歌单内的歌名或歌手，支持部分匹配和英文大小写忽略。
-首次筛选会读取整个歌单，包含未浏览的分页；后续筛选复用已读取的歌曲信息。
-清空歌单内搜索框并回车，可返回完整歌单。重新打开歌单会刷新歌曲信息。
-筛选后显示歌单总数和匹配数量，匹配结果支持分页。按回车播放会以匹配结果建立队列。
-浏览或筛选本身不改变当前播放队列。全站搜索仍使用顶部搜索框。
-点击歌手名可进入歌手详情，查看头像、简介与歌曲。歌手页默认按热门排序，可切换最新；
-排序覆盖全部歌曲，翻页继续所选顺序。合唱歌曲的每位歌手可分别点击，键盘按 `i` 选择。
-点击返回或按 `Esc` 可恢复原页面、页码和选中歌曲。浏览或切换歌手排序不会改变正在播放的队列。
+需要 **Python 3.13+**、[uv](https://docs.astral.sh/uv/) 和 [mpv](https://mpv.io/)。音频由本机 mpv 进程播放。
 
-搜索结果用 `♥`、`♡`、`?` 分别表示已喜欢、未喜欢、尚未确认；点击标记或按 `s` 可切换。
-未登录或查询失败时显示未知状态，修改失败保留上次确认值，按 `Ctrl+R` 重新查询。
-底部可直接点击上一首、暂停／继续、下一首，键盘快捷键继续可用。
-
-80×24 界面预览：[歌手详情](docs/artist-preview.png)、[搜索喜欢标记与底部按钮](docs/search-likes-preview.png)。
-两平台的排序与分页依据见 [QQ 接口验证](docs/qq-artist-api.md) 和 [Enhanced 接口验证](docs/netease-artist-api.md)。
-
-选择一首歌会以整个歌单、搜索结果或歌手歌曲列表建立播放队列，从选中歌曲开始播放，切歌可跨页。
-默认顺序播放，到列表末尾停止。按 `r` 切换列表循环、单曲循环或随机播放，顶部显示当前模式。
-列表循环会在整个列表的首尾衔接。单曲循环在歌曲结束后重播，手动 `n` / `p` 仍会切歌。
-随机播放首次切歌时加载整个列表的歌曲信息，再打乱顺序，每轮不重复播放。
-`p` 返回随机播放历史中的上一首，`n` 可沿历史继续。单首列表会重复播放。
-浏览其他歌单或搜索结果不会替换正在播放的队列；再次按回车播放才会替换。
-
-听歌时可浏览其他歌单或搜索结果，选中歌曲后按 `a` 加入手动待播。
-手动待播按添加顺序播放，听完后继续原列表；不改变原列表的分页位置或随机播放历史。
-`n` 优先播放手动待播；手动歌曲播放时按 `p` 可回到原列表中被插入歌曲打断的位置。
-单曲循环也适用于正在播放的手动歌曲，手动按 `n` 仍会继续切歌。
-`F3` 显示手动待播和原列表已加载的后续歌曲，更多页面会在播放时继续读取；
-随机模式下会先读取完整列表，队列页按实际随机待播顺序显示。
-队列页会随切歌实时更新。选中手动待播项后，按 `Ctrl+↑` / `Ctrl+↓` 调整顺序，
-按 `Delete` 删除；`Ctrl+Delete` 清空手动待播，当前歌曲和原列表继续播放。
-队列页内可用 `Space` 暂停 / 继续，用 `n` / `p` 切歌。
-按 Enter 开始新的播放列表会清空手动待播。平台切换同样清空当前队列，平台之间不混播。
-
-音频加载失败后按 `F5`，会重新获取原队列项的播放地址，不受正在浏览的列表影响。
-播放器进程退出时，`F5` 会重建 mpv，并恢复最近记录的进度、暂停状态和音量。
-所选音质不可用时自动逐档尝试至标准音质；所有档位都不可用时保留错误，不自动跳过歌曲。
-获取音源中和失败后，底部保留歌曲名、歌手及重试入口；失败提示保留标准档的具体原因。
-QQ 接口结果码会原样显示，不直接认定为会员问题。可按 `F5` 重试，或 `N` 手动下一首。
-
-音量、所选音质和播放模式按平台保存。播放队列、手动待播、筛选结果、随机历史和进度
-按平台与登录账号分别保存；播放中每五秒保存一次，退出或切平台时也保存。
-重新启动不会自动播放，按 `F6` 才继续当前账号的上次会话，并重新取得播放地址。
-切回之前的平台也可按 `F6` 恢复。会话文件不含 Cookie、凭证或播放地址。
-状态文件位于 `~/.local/share/music-tui/preferences.json` 与 `sessions.json`，
-支持 `XDG_DATA_HOME`，权限为 `0600`。
-
-界面默认跟随系统昼夜设置，并在系统设置变化后自动更新。`F9` 切换为手动日间/夜间，
-`Shift+F9` 恢复跟随系统；选择会保存，重启后恢复。自动识别支持 macOS、Windows 和 GNOME；
-无法读取系统外观时保持当前配色，并在标题栏说明；仍可使用 `F9` 手动切换。
-
-点击歌曲列表的歌曲、歌手或时长表头可切换升降序，点击「序」恢复原顺序；
-按 `O` 或列表右上角的排序按钮也能切换。歌曲排序只影响当前页显示，保留选中歌曲，播放队列继续按来源顺序播放。
-歌单侧栏的排序按钮可切换默认、播放量降序/升序和名称顺序，覆盖已加载的全部歌单；
-缺少统计的歌单排在末尾。这里显示的是歌单累计播放量，不代表你的个人单曲播放次数。
-当前接入的 QQ 歌单接口没有返回个人单曲次数，歌曲列表暂不提供此项显示或排序。
-此项能力只考虑现有平台登录后即可授权的接口，不接入需额外申请开通的腾讯 IoT 音乐服务。
-
-播放页概览会显示歌曲封面，使用真彩色半块字符适配普通终端；清晰度取决于终端字符网格。
-封面加载失败不影响音乐播放，未提供封面的歌曲显示空态。
-宽屏会放大封面并将歌曲信息居中组合。底部按钮均为单行：宽屏两组并排，
-普通终端上下排列，窄屏折为两列；按钮不会随终端宽度无限拉伸。
-
-已在本机登录 QQ 后，可运行 `uv run python scripts/check_live_ui.py` 做真实端到端检查。
-脚本使用登录文件的临时副本、独立会话和静音 mpv，验证歌单、搜索、播放、封面、歌词、
-暂停/继续及 120×40、80×24、48×16、36×16 的布局，不修改歌单或喜欢状态；界面截图保存在临时目录。
-
-按 `F7` 打开独立播放页，集中查看当前歌曲、播放状态、进度、音量、音质、模式、来源和下一首。
-底部按钮与列表页共用播放控制；`Space` 暂停 / 继续，`n` / `p` 切歌，左右箭头快进退。
-顶部导航切换「歌曲 / 播放 / 最近」，播放页内用「概览 / 歌词 / 队列」页签切换内容。
-`F3` / `F4` 直接打开队列或歌词页签，播放控制和进度始终保留在底部。音质和帮助仍可通过快捷键打开。
-按 `F7` 或 `Esc` 返回浏览页，不会停止播放；按 `/` 搜索、`f` 筛选或 `g` 定位当前歌曲时也会返回浏览页。
-
-按 `F8` 查看当前账号的最近播放，按 Enter 以单曲队列重播选中歌曲，重新获取播放地址。
-按 `o` 打开原歌单或搜索来源，保留当前播放；按 `Tab` 切换到去重后的最近来源列表。
-同一首歌重播后移到最前，最多保留 100 首。匿名播放不写入历史，平台和账号之间分别保存。
-最近播放文件为 `~/.local/share/music-tui/history.json`，支持 `XDG_DATA_HOME`，权限为 `0600`；
-只保存曲目信息、来源和播放时间，不保存 Cookie 或播放地址。
-
-`F4` 显示逐行同步歌词及可用译文，左右箭头可快进退；没有时间信息时可手动滚动阅读。
-歌曲变化后，歌词页签自动加载新歌并继续同步。歌词加载失败时，在歌词页签按 `F5` 重试。
-`s` 针对歌曲列表中选中的歌曲；`w` 在歌曲页添加选中歌曲，在播放页添加当前播放歌曲。
-按 `Ctrl+R` 更新正在浏览的歌曲内容。网易云官方接入暂不支持歌词和喜欢状态修改，
-会明确提示不支持，不切换后端。
-
-点击歌单侧栏的“新建”或按 `Ctrl+N` 输入名称，在 QQ 音乐和网易云 Enhanced 创建歌单。
-加入歌单时也可选择“新建歌单并加入”。创建成功而歌曲加入失败时，会分别提示，不重复创建歌单。
-QQ、Enhanced 和网易云官方均支持添加到当前账号自己的歌单；官方接入暂不支持新建歌单。
-
-播放中按 `u` 查询当前歌曲的可用音质。未播放时，查询歌曲列表中选中的歌曲。
-QQ 音乐菜单一次请求各档授权地址，再检查音频服务器是否可以访问，只显示有有效地址的档位，
-并按从高到低排列。没有权限或服务器返回 404 的档位不会出现在菜单里。
-QQ 音乐候选档位为臻品母带、臻品全景声、臻品音质、Hi-Res 高解析、SQ 无损、HQ 高品质和标准音质。
-高级档位使用对应的独立音源。
-本次运行期间，后续歌曲会使用所选音质。播放中切换会保留进度和暂停状态。
-顶部显示所选音质，底部显示当前播放音质、进度条和音量。
-歌曲音源、账号及会员权限决定所选音质是否可用。不可用时按上面的档位顺序逐档尝试，
-直到取得可播放的完整音源或尝试到标准音质。界面显示实际音质和自动切换提示；
-用户首选音质保持不变，下一首仍从首选档开始。网络、登录或播放器错误不会触发降档。
-手动切换音质时仍保留进度和暂停状态；所有档位都失败时，已有播放保持原音频。
-
-界面预览（示例歌曲）：[夜间模式](docs/tui-preview.png) · [日间模式](docs/tui-day-preview.png) · [平台切换菜单](docs/platform-switch.svg)。
-新增功能预览：[待播队列](docs/queue-preview.svg) · [同步歌词](docs/lyrics-preview.svg)。
-本轮预览：[独立播放页](docs/playback-preview.svg) · [最近播放](docs/history-preview.svg)。
-
-## 从源码运行
-
-需要 Python 3.13+、[uv](https://docs.astral.sh/uv/) 和 [mpv](https://mpv.io/)。
+macOS：
 
 ```sh
 brew install uv mpv
+uv tool install --python 3.13 music-tui
+music-tui
+```
+
+Linux 请先用系统包管理器安装 mpv，并安装 uv，再执行上面的 `uv tool install` 命令。
+播放器通过 Unix socket 控制 mpv；当前 CI 验证 Linux 和 macOS。
+
+升级和查看版本：
+
+```sh
+uv tool upgrade music-tui
+music-tui --version
+```
+
+`music-tui -v` 同样可以查看版本。查看所有命令行选项：`music-tui --help`。
+
+## 第一次听歌
+
+1. 运行 `music-tui`。首次进入 QQ 音乐，之后沿用上次使用的平台。
+2. 按 `l`，用 QQ 音乐手机 App 扫描终端中的二维码并确认。二维码过期时按 `r` 刷新。
+3. 在左侧选择歌单并按 `Enter`，再在右侧选歌并按 `Enter` 播放。
+4. 按 `Space` 暂停或继续，按 `n` / `p` 切歌，按 `q` 退出。
+
+QQ 歌单包含「我喜欢」、自建和收藏歌单。有效登录状态会保存在本机，后续启动会自动检查。
+常见的 80×24 终端可以显示主界面和登录页。
+
+按 `F2` 可在 QQ 音乐与网易云 Enhanced 之间切换。切换会停止当前播放并清空队列，各平台分别保存账号状态。
+首次使用网易云请先完成下一节的配置。
+
+## 网易云音乐配置
+
+默认通过 [NeteaseCloudMusicApiEnhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced) 接入，不需要申请开发者应用。使用本机服务需要 **Node.js 22+ 和 npx**。
+
+macOS：
+
+```sh
+brew install node
+music-tui --setup-netease
+music-tui --netease-service
+music-tui --source netease
+```
+
+向导中选择「本机服务」，它会选择空闲端口并保存地址。第二条 Music TUI 命令才会启动服务。
+进入播放器后按 `l`，用网易云音乐手机 App 扫码确认。
+
+本机服务由 launchd 在后台运行，关闭终端不影响服务，异常退出后会自动重启。
+注销或重启电脑后，需要再次运行 `music-tui --netease-service`。
+
+```sh
+music-tui --netease-service-status  # 查看服务状态
+music-tui --netease-service-stop    # 停止服务
+```
+
+首次启动会下载固定版本 `@neteasecloudmusicapienhanced/api@4.41.1`。
+服务绑定 `127.0.0.1`，自动设置 `ENABLE_GENERAL_UNBLOCK=false` 和 `ENABLE_PROXY=false`。
+
+Linux 等其他系统可手动运行服务，保持该终端开启：
+
+```sh
+HOST=127.0.0.1 PORT=3000 ENABLE_GENERAL_UNBLOCK=false ENABLE_PROXY=false \
+  npx --yes @neteasecloudmusicapienhanced/api@4.41.1
+```
+
+然后在另一个终端运行 `music-tui --setup-netease`，选择「已有服务」，填写 `http://127.0.0.1:3000`，再运行 `music-tui --source netease`。
+已有服务必须关闭全局解锁功能。临时覆盖保存的地址可用：
+
+```sh
+music-tui --source netease --netease-api-url http://127.0.0.1:3000
+```
+
+已有获批应用凭证和设备参数的用户，也可通过命令行使用网易云官方接入：
+
+```sh
+music-tui --netease-backend official --setup-netease
+music-tui --source netease --netease-backend official
+```
+
+官方接入不在 `F2` 菜单中，暂不支持歌词、喜欢状态和新建歌单；支持向自己的歌单添加歌曲。
+详细配置、日志位置和官方接入参数见[网易云配置指南](https://github.com/FlyTOmeLight/music-tui/blob/main/docs/netease-setup.md)。
+
+## 日常操作
+
+### 找歌与管理歌单
+
+- 按 `/` 输入歌名或歌手并回车，进行全站搜索。
+- 打开歌单后按 `f`，按歌名或歌手筛选整个歌单，包含尚未浏览的分页。清空输入并回车恢复完整歌单。
+- 按 `[` / `]` 翻页，也可点击列表下方的翻页按钮。先按 `Esc` 将焦点移出输入框。
+- 点击歌手名或按 `i` 进入歌手详情，查看简介和歌曲；热门／最新排序覆盖整个歌手歌曲列表。按 `Esc` 返回原页面。
+- 按 `s` 喜欢或取消喜欢选中歌曲，按 `w` 加入已有可写歌单，按 `Ctrl+N` 新建歌单。加入歌曲时也可选择新建歌单。
+
+搜索结果的 `♥` / `♡` / `?` 分别表示已喜欢、未喜欢和状态未知。点击标记也能切换喜欢状态。
+按 `Ctrl+R` 刷新当前列表和喜欢状态；查询失败时显示未知，修改失败时保留上次确认的状态。
+
+点击歌曲、歌手或时长表头可排序，点击「序」恢复原顺序；`o` 也可切换本页排序。
+歌曲排序只影响当前页显示，播放仍按来源顺序。歌单侧栏可按名称或累计播放量排序。
+
+### 播放队列与手动待播
+
+从歌单、搜索结果、筛选结果或歌手歌曲列表中选歌播放，会以该列表建立队列，并从所选歌曲开始跨页播放。
+浏览其他列表或筛选歌曲不会改变队列；再次选歌播放才会替换队列。
+
+按 `r` 切换顺序播放、列表循环、单曲循环和随机播放。顺序播放到末尾停止；随机播放按轮打乱，每轮不重复，`p` 可返回播放历史中的上一首。
+
+浏览时选中歌曲并按 `a` 加入手动待播。它们按添加顺序优先播放，听完继续原列表。
+按 `F3` 查看队列，在队列页可以：
+
+| 按键 | 操作 |
+| --- | --- |
+| `Ctrl+↑` / `Ctrl+↓` | 调整选中手动待播歌曲的顺序 |
+| `Delete` | 删除选中手动待播歌曲 |
+| `Ctrl+Delete` | 清空手动待播，保留当前歌曲和原列表 |
+
+开始新列表或切换平台会清空手动待播。按 `g` 返回当前播放来源，并定位歌曲。
+
+### 播放页、歌词与音质
+
+按 `F7` 打开独立播放页，通过「概览 / 歌词 / 队列」页签查看封面、歌曲信息、同步歌词和待播内容。
+按 `F4` 直接查看歌词，支持可用译文；没有时间信息的歌词可手动滚动。按 `F7` 或 `Esc` 返回浏览页，音乐继续播放。
+
+按 `u` 查看当前歌曲可用的音质，未播放时查看选中歌曲。
+播放中切换音质会保留进度和暂停状态；后续歌曲继续使用首选音质。
+音质取决于歌曲音源、账号和会员权限。首选音质不可用时，逐档尝试至标准音质，并显示实际音质；下一首仍从首选档开始。
+网络、登录或播放器错误不会触发降档。所有档位都失败时显示具体错误，等待重试或手动切歌。
+
+### 继续上次播放与最近记录
+
+音量、音质和播放模式按平台保存。队列、手动待播、筛选结果、随机历史和进度按平台与账号分别保存。
+重新启动后按 `F6` 继续上次会话，应用会重新获取播放地址；启动时不会自动播放。
+
+按 `F8` 查看当前账号的最近播放，按 `Enter` 以单曲队列重播。
+`Tab` 切换最近歌曲／来源，`o` 打开原来源并保留当前播放。最多保留 100 首歌曲，匿名播放不写入历史。
+
+## 快捷键速查
+
+输入框内可以正常输入空格和字母；按 `Esc` 返回歌曲区域后再使用字母快捷键。`F1` 可随时打开帮助。
+
+| 按键 | 操作 |
+| --- | --- |
+| `F1` / `F2` | 帮助 / 切换平台 |
+| `F3` / `F4` | 队列 / 歌词 |
+| `F5` / `F6` | 重试失败操作或恢复播放器 / 继续上次会话 |
+| `F7` / `F8` | 独立播放页 / 最近播放 |
+| `F9` / `Shift+F9` | 手动切换日间、夜间 / 恢复跟随系统 |
+| `l` | 扫码登录 |
+| `/` / `f` | 全站搜索 / 歌单内筛选 |
+| `Tab` / `Shift+Tab` | 切换焦点区域 |
+| `↑` / `↓` / `Enter` | 选择 / 打开歌单或播放歌曲 |
+| `[` / `]` | 上一页 / 下一页 |
+| `PageUp` / `PageDown` | 歌曲区域内翻页 |
+| `Space` / `n` / `p` | 暂停或继续 / 下一首 / 上一首 |
+| `←` / `→` | 后退 / 前进 5 秒 |
+| `-` / `+`（或 `=`） | 调整音量 |
+| `r` / `u` | 播放模式 / 音质 |
+| `a` / `g` | 加入手动待播 / 定位当前歌曲 |
+| `s` / `w` / `Ctrl+N` | 喜欢 / 加入歌单 / 新建歌单 |
+| `i` / `o` / `Ctrl+R` | 歌手详情 / 本页排序 / 刷新列表 |
+| `Esc` | 返回歌曲区域或关闭当前页面 |
+| `q` / `Ctrl+C` | 退出并停止播放 |
+
+底部的上一首、暂停／继续、下一首按钮也可直接点击。主题默认跟随系统，手动选择会保存。
+
+## 常见问题
+
+| 现象 | 处理方式 |
+| --- | --- |
+| mpv 不可用或意外退出 | 确认已安装 mpv 且在 `PATH` 中；按 `F5` 重建播放器，恢复已记录的进度、暂停状态和音量。 |
+| 歌曲加载失败 | 按 `F5` 重试原失败操作；重试不受当前浏览列表影响。按 `n` 可手动切歌。 |
+| 二维码过期或登录失效 | 登录页按 `r` 刷新二维码；按 `l` 重新扫码。 |
+| 网易云服务无法连接 | macOS 用 `--netease-service-status` 检查状态；确认服务已启动、地址与端口一致。 |
+| 无法选择某档音质 | 菜单只列出该歌曲当前可用的音质，检查账号权限和歌曲音源。 |
+| 歌词加载失败 | 在歌词页签按 `F5` 重试。 |
+| 快捷键被当作文字输入 | 按 `Esc` 离开输入框；英文方括号 `[` 和 `]` 分别用于翻页。 |
+
+## 本机数据
+
+以下为默认路径。数据文件支持 `XDG_DATA_HOME`，配置文件支持 `XDG_CONFIG_HOME`；登录凭证和播放状态文件权限为 `0600`。
+
+| 内容 | 路径 |
+| --- | --- |
+| QQ 登录凭证 | `~/.local/share/qqmusic-tui/credential.json` |
+| 网易云 Enhanced 登录凭证 | `~/.local/share/music-tui/netease/netease-credential.json` |
+| 网易云官方账号数据 | `~/.local/share/music-tui/netease-official/` |
+| 界面与播放偏好 | `~/.local/share/music-tui/preferences.json` |
+| 播放会话 / 最近播放 | `~/.local/share/music-tui/sessions.json` / `history.json` |
+| Enhanced 服务配置 / 日志 | `~/.config/music-tui/enhanced.json` / `enhanced-service.log` |
+
+会话和历史只保存恢复播放所需的曲目信息、来源及状态，不保存 Cookie 或播放地址。
+删除对应平台的登录凭证可清除本机保存的登录状态。修改服务配置后需重新启动播放器。
+
+## 从源码运行与开发
+
+```sh
 git clone https://github.com/FlyTOmeLight/music-tui.git
 cd music-tui
 uv sync --locked
 uv run music-tui
 ```
 
-网易云启动方式见下一节。
+源码运行时，将上文的 `music-tui` 命令替换为 `uv run music-tui` 即可。
+项目使用 Textual 构建界面、QQMusicApi 访问 QQ 音乐接口、mpv 播放音频，依赖版本由 `uv.lock` 固定。
 
-项目复用 [Textual](https://github.com/Textualize/textual) 处理终端输入与布局，
-[QQMusicApi](https://github.com/L-1124/QQMusicApi/tree/v0.7.3) 处理扫码、会话和音乐接口，
-[terminal-qrcode](https://pypi.org/project/terminal-qrcode/) 渲染紧凑二维码。
-官方网易云请求用 [cryptography](https://cryptography.io/) 执行 RSA 签名，
-用 [qrcode](https://pypi.org/project/qrcode/) 与 Pillow 生成登录二维码 PNG。
-音频由独立的 mpv 进程播放，通过本机 Unix socket 控制，不依赖 Python 音频绑定。
-依赖的具体版本由 `uv.lock` 固定。
-
-QQ 音乐账号数据继续位于 `~/.local/share/qqmusic-tui/`，也支持 `XDG_DATA_HOME`。
-`credential.json` 的权限为 `0600`。删除它即可清除本机保存的登录状态。
-
-## 网易云音乐
-
-网易云默认使用 [NeteaseCloudMusicApiEnhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced)。
-不需要开发者应用 ID、私钥或设备授权参数。首次运行交互式向导：
-
-```sh
-uv run music-tui --setup-netease
-```
-
-选择「本机服务」即可。向导检查 Node.js 22+ 和 npx，自动选择空闲本机端口并保存服务地址。
-已有服务时，选择「已有服务」并填写地址即可。详细步骤见[网易云配置指南](docs/netease-setup.md)。
-
-macOS 本机服务由 launchd 在后台守护，执行启动命令后即可继续使用当前终端：
-
-```sh
-uv run music-tui --netease-service
-```
-
-服务异常退出后会自动重启，关闭终端不会停止服务；重复启动不会创建多个服务。
-服务仅在当前登录会话运行，注销或重启电脑后需重新执行启动命令。
-查看状态或主动停止服务：
-
-```sh
-uv run music-tui --netease-service-status
-uv run music-tui --netease-service-stop
-```
-
-随后启动播放器：
-
-```sh
-uv run music-tui
-```
-
-按 `F2` 选择网易云 Enhanced，再按 `l`，用网易云音乐手机 App 扫码确认。
-也可执行 `uv run music-tui --source netease`，直接进入网易云。
-首次启动服务时，npx 会下载固定版本 `@neteasecloudmusicapienhanced/api@4.41.1`。
-服务绑定 `127.0.0.1`，自动设置 `ENABLE_GENERAL_UNBLOCK=false` 和 `ENABLE_PROXY=false`。
-服务停止后，播放器的网易云请求会提示连接错误。
-
-服务配置保存在 `~/.config/music-tui/enhanced.json`，支持 `XDG_CONFIG_HOME`。
-服务日志保存在 `~/.config/music-tui/enhanced-service.log`；设置 `XDG_CONFIG_HOME`
-时使用 `$XDG_CONFIG_HOME/music-tui/enhanced-service.log`。
-后续无需重新运行向导。`--netease-api-url` 可临时覆盖保存的服务地址。
-已有服务也必须关闭全局解锁功能，具体命令见配置指南。
-其他操作系统暂不支持上述守护命令，可按配置指南使用 npx 手动运行服务。
-
-官方开放平台仅保留命令行入口，不在界面平台菜单中显示。已有获批应用凭证和设备参数时，执行：
-
-```sh
-uv run music-tui --netease-backend official --setup-netease
-uv run music-tui --source netease --netease-backend official
-```
-
-官方配置方法见[指南中的可选官方接入](docs/netease-setup.md#可选官方接入)。
-已有官方配置不会被 Enhanced 向导覆盖。两种方式的请求失败均显示错误，不会自动切换后端。
-
-两个后端均支持歌单内筛选和现有播放模式，拒绝试听地址；服务端返回的低档地址
-不会冒充所选音质，应用会另行请求下一档，并显示最终取得的实际音质。
-切换音质会保留进度和暂停状态。Enhanced 凭证保存在
-`~/.local/share/music-tui/netease/netease-credential.json`；官方凭证单独保存在
-`~/.local/share/music-tui/netease-official/`。文件权限为 `0600`，支持 `XDG_DATA_HOME`。
-平台切换会停止当前播放并清空队列，再恢复目标平台的登录状态和歌单。
-修改本机配置后需重新启动 Music TUI。
-实现选择及接口来源见[网易云接入说明](docs/netease-integration.md)。
-
-## 验证
+修改 Python 代码后运行 Black，交付前执行：
 
 ```sh
 uv run black src tests
 uv run black --check src tests
 uv run ruff check src tests
 uv run pytest -q
+uv build
+bash scripts/check_install.sh
 ```
 
-测试覆盖键盘操作、搜索取消、队列独立性、跨页切歌、列表分页、总数显示、
-跨页歌单内搜索、筛选结果播放与取消、循环方式、权限错误、二维码显示与登录状态转换、
-凭证文件权限，以及真实 mpv 的播放、暂停、定位、音量、结束事件和退出清理。
-新增测试覆盖手动待播与删除、失败歌曲重试、mpv 断线重建、会话与账号隔离、
-随机历史恢复、歌词同步，以及喜欢和加歌单的离线接口契约。
-mpv 集成测试使用本地产生的静音 WAV，不访问网络。
-GitHub Actions 在 `main`、`release-v*`、`bugfix-*` 的提交和 Pull Request 上运行
-Linux/macOS 检查，包括真实 mpv 测试、构建以及仓库外全新环境的 wheel 安装验证。
-本地构建后也可执行 `bash scripts/check_install.sh` 验证安装。
+测试使用离线音乐响应；mpv 集成测试播放本地生成的静音 WAV。
+GitHub Actions 在 Linux/macOS 上执行检查、构建及仓库外安装验证。
+已登录 QQ 的开发者还可运行 `uv run python scripts/check_live_ui.py`，验证真实播放与不同终端尺寸的布局。
 
-开发时另已实测 QQ 搜索、真实二维码获取、账号登录恢复、个人歌单总数与跨页读取，
-以及 QQ 音频地址交给 mpv 解码播放。
+[项目结构](https://github.com/FlyTOmeLight/music-tui/blob/main/docs/python-project-structure.md) · [开发约定](https://github.com/FlyTOmeLight/music-tui/blob/main/AGENTS.md) · [网易云接入说明](https://github.com/FlyTOmeLight/music-tui/blob/main/docs/netease-integration.md) · [反馈问题](https://github.com/FlyTOmeLight/music-tui/issues)
 
-许可证：GPL-3.0-or-later，见 `LICENSE`。
-版本更新内容见 [更新记录](CHANGELOG.md)。
-
-## 开发约定
-
-功能研发和发版使用版本分支，例如 `release-v0.2.0`；每个缺陷使用单独的修复分支，
-例如 `bugfix-playback-retry`。完整分支约定见 [AGENTS.md](AGENTS.md#commit--pull-request-guidelines)。
-
-每次修改 Python 代码后执行 `uv run black src tests`，提交前检查 Black、Ruff 和 pytest。
-所有 Python 文件、函数及方法都需要简短的 docstring，说明职责和重要行为。
-独立任务可交给子代理并行处理，由主代理整合并验证。
-代码组织调研与建议见 [Python 项目结构](docs/python-project-structure.md)。
+许可证：[GPL-3.0-or-later](https://github.com/FlyTOmeLight/music-tui/blob/main/LICENSE)。
