@@ -1335,13 +1335,16 @@ class MusicApp(App):
         else:
             self.search_likes.bind(self.music)
         likes = self.search_likes
+        likes.invalidate()
+        if isinstance(self.source, str):
+            self.draw_tracks()
         try:
-            updated = await likes.refresh()
+            await likes.refresh()
         except Exception as error:
             if likes is self.search_likes and isinstance(self.source, str):
                 self.status(f"喜欢状态查询失败：{error_text(error)} · Ctrl+R 重试")
-        else:
-            if updated and likes is self.search_likes and isinstance(self.source, str):
+        finally:
+            if likes is self.search_likes and isinstance(self.source, str):
                 self.draw_tracks()
 
     def action_toggle_like(self, identity: str) -> None:

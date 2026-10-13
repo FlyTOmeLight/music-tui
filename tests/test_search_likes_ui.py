@@ -2,6 +2,7 @@
 
 import asyncio
 
+import pytest
 from test_app import Audio, Library
 from textual.widgets import DataTable, Static
 
@@ -22,6 +23,7 @@ class LikesLibrary(Library):
         self.ids = {"z"}
         self.writes = []
         self.fail_write = False
+        self.fail_query = False
         self.query_started = asyncio.Event()
         self.query_release = None
 
@@ -43,6 +45,8 @@ class LikesLibrary(Library):
         self.query_started.set()
         if self.query_release is not None:
             await self.query_release.wait()
+        if self.fail_query:
+            raise ValueError("查询失败")
         return ids
 
     async def set_liked(self, track, liked):
@@ -103,6 +107,66 @@ async def test_rejected_write_keeps_confirmed_symbol_and_shows_error():
         assert symbols(app) == ["♥", "♡"]
         assert "写入失败" in str(app.query_one("#status", Static).render())
         assert music.writes == []
+
+
+async def test_like_refresh_shows_unknown_while_waiting_for_server():
+    """Refreshing a confirmed list hides its stale symbols until a new response."""
+    music = LikesLibrary()
+    app = MusicApp(music, Audio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view("query").wait()
+        await pilot.pause()
+        assert symbols(app) == ["♥", "♡"]
+        music.ids = {"a"}
+        music.query_started.clear()
+        music.query_release = asyncio.Event()
+        worker = app.refresh_search_likes()
+        try:
+            async with asyncio.timeout(2):
+                await music.query_started.wait()
+            await pilot.pause()
+            assert symbols(app) == ["?", "?"]
+        finally:
+            music.query_release.set()
+            async with asyncio.timeout(2):
+                await worker.wait()
+        await pilot.pause()
+        assert symbols(app) == ["♡", "♥"]
+
+
+@pytest.mark.parametrize("interaction", ["mouse", "keyboard"])
+async def test_failed_like_refresh_requires_real_state_before_toggle(interaction):
+    """Click and S never write stale likes and use the server after recovery."""
+    music = LikesLibrary()
+    app = MusicApp(music, Audio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view("query").wait()
+        await pilot.pause()
+        assert symbols(app) == ["♥", "♡"]
+        music.ids = {"a"}
+        music.fail_query = True
+        await app.refresh_search_likes().wait()
+        await pilot.pause()
+        assert symbols(app) == ["?", "?"]
+        assert "查询失败" in str(app.query_one("#status", Static).render())
+        table = app.query_one("#songs", DataTable)
+        table.move_cursor(row=1)
+        table.focus()
+        for recovered in (False, True):
+            music.fail_query = not recovered
+            if interaction == "mouse":
+                position = table.ordered_columns[0]
+                x = position.width + table.cell_padding * 2 + table.cell_padding
+                await pilot.click("#songs", offset=(x, 2))
+            else:
+                await pilot.press("s")
+            await pilot.pause()
+            if not recovered:
+                assert music.writes == []
+                assert symbols(app) == ["?", "?"]
+            else:
+                assert music.writes == [("a", False)]
+                assert symbols(app) == ["♡", "♡"]
 
 
 async def test_logged_out_search_shows_unknown_and_requires_login():

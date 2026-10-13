@@ -39,8 +39,8 @@ async def test_search_likes_confirms_whole_list_and_toggles():
     source.liked_ids.assert_awaited_once()
 
 
-async def test_unknown_toggle_queries_before_write_and_preserves_failed_state():
-    """Unknown is queried before toggling, and a rejected write retains confirmation."""
+async def test_write_failure_keeps_confirmation_but_refresh_failure_invalidates_it():
+    """Keep failed-write confirmation but require a new query after failed refresh."""
     source = fake_source([TRACK.mid])
     source.set_liked.side_effect = ValueError("write failed")
     likes = SearchLikes(source)
@@ -51,7 +51,44 @@ async def test_unknown_toggle_queries_before_write_and_preserves_failed_state():
     source.liked_ids.side_effect = ValueError("query failed")
     with pytest.raises(ValueError, match="query failed"):
         await likes.refresh()
-    assert likes.state(TRACK) is True
+    assert likes.state(TRACK) is None
+    source.set_liked.reset_mock()
+    with pytest.raises(ValueError, match="query failed"):
+        await likes.toggle(TRACK)
+    source.set_liked.assert_not_awaited()
+
+
+async def test_refresh_invalidates_while_waiting_for_an_inflight_write():
+    """Refreshing masks old confirmation without breaking an already accepted write."""
+    source = fake_source()
+    likes = SearchLikes(source)
+    await likes.refresh()
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def write(track, liked):
+        """Hold the write and expose its accepted state to the following refresh."""
+        started.set()
+        await release.wait()
+        source.liked_ids.return_value = {track.mid} if liked else set()
+
+    source.set_liked.side_effect = write
+    write_task = asyncio.create_task(likes.toggle(TRACK))
+    refresh_task = None
+    try:
+        async with asyncio.timeout(2):
+            await started.wait()
+            refresh_task = asyncio.create_task(likes.refresh())
+            await asyncio.sleep(0)
+            assert likes.state(TRACK) is None
+            release.set()
+            assert await write_task is True
+            assert await refresh_task
+            assert likes.state(TRACK) is True
+    finally:
+        release.set()
+        await asyncio.gather(
+            write_task, *([refresh_task] if refresh_task else []), return_exceptions=True
+        )
 
 
 async def test_unknown_query_failure_never_writes():

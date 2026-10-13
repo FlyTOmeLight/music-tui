@@ -39,15 +39,21 @@ class SearchLikes:
         self.bind(self.source)
         return generation == self._generation
 
+    def invalidate(self) -> None:
+        """Mark cached confirmations unknown before a fresh account query begins."""
+        self._ids = None
+
     async def refresh(self) -> bool:
-        """Reload the full like list; return False for logged-out or obsolete work."""
+        """Invalidate old confirmations, retaining unknown state if the query fails."""
         self.bind(self.source)
+        self.invalidate()
         if not self.account_id:
             return False
         generation, source, lock = self._generation, self.source, self._lock
         async with lock:
             if not self._current(generation):
                 return False
+            self.invalidate()
             ids = await source.liked_ids()
             if not self._current(generation):
                 return False
@@ -73,14 +79,16 @@ class SearchLikes:
                     if not self._current(generation):
                         return None
                     self._ids = ids
-                liked = track.mid not in self._ids
+                ids = self._ids
+                liked = track.mid not in ids
                 await source.set_liked(track, liked)
                 if not self._current(generation):
                     return None
-                if liked:
-                    self._ids.add(track.mid)
-                else:
-                    self._ids.discard(track.mid)
+                if self._ids is ids:
+                    if liked:
+                        ids.add(track.mid)
+                    else:
+                        ids.discard(track.mid)
                 return liked
         finally:
             pending.discard(track.mid)
