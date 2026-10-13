@@ -1,11 +1,30 @@
 """Command-line platform selection and resource ownership tests."""
 
 import importlib
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 
 from music_tui import app
+
+
+@pytest.mark.parametrize("option", ["-v", "--version"])
+def test_main_reports_installed_version_without_starting_app(monkeypatch, capsys, option):
+    """Print the installed package version and exit without initializing music or mpv."""
+
+    def unexpected_start(*args, **kwargs):
+        """Reject application startup while reporting the package version."""
+        pytest.fail("version option started the application")
+
+    monkeypatch.setattr(app, "run", unexpected_start)
+    monkeypatch.setattr("sys.argv", ["music-tui", option])
+    with pytest.raises(SystemExit) as error:
+        app.main()
+    assert error.value.code == 0
+    output = capsys.readouterr()
+    assert output.out == f"music-tui {version('music-tui')}\n"
+    assert output.err == ""
 
 
 @pytest.mark.parametrize(
