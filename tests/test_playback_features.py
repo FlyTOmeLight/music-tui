@@ -6,9 +6,10 @@ import pytest
 from test_app import FIRST, SECOND, THIRD, Audio, Library
 from textual.widgets import DataTable, Input, ListView, Static, TabbedContent
 
-from music_tui.app import MusicApp, RepeatMode
+from music_tui.app import MusicApp
 from music_tui.models import LyricLine, Lyrics, Playlist
 from music_tui.playback_screen import PlaybackScreen
+from music_tui.playback_session import RepeatMode
 from music_tui.screens import HelpScreen, LyricsPanel, PlaylistPickerScreen
 
 
@@ -101,12 +102,12 @@ async def test_manual_next_tracks_preserve_original_queue_and_browsing(mode):
         await pilot.press("enter")
         await pilot.pause()
         app.repeat_mode = mode
-        app.reset_shuffle(app.index)
+        app.playback_queue.reset_shuffle(app.playback_queue.index)
         await app.load_view(Playlist(3, "其他歌单")).wait()
         await pilot.press("a", "a", "n")
         await pilot.pause()
         assert app.current == THIRD
-        assert app.queue_source == "original" and app.index == 0
+        assert app.playback_queue.source == "original" and app.playback_queue.index == 0
         assert app.source == Playlist(3, "其他歌单")
         await pilot.press("n")
         await pilot.pause()
@@ -114,8 +115,8 @@ async def test_manual_next_tracks_preserve_original_queue_and_browsing(mode):
         await pilot.press("n")
         await pilot.pause()
         assert app.current in ({SECOND, THIRD} if mode == RepeatMode.RANDOM else {SECOND})
-        assert app.manual_current is None and not app.pending_tracks
-        assert app.queue_source == "original"
+        assert app.playback_queue.manual is None and not app.playback_queue.pending
+        assert app.playback_queue.source == "original"
 
 
 async def test_single_repeat_replays_manual_song_then_manual_next_returns_to_source():
@@ -151,7 +152,7 @@ async def test_queue_delete_and_locate_preserve_audio_and_original_source():
         assert app.screen.query_one("#playback-tabs", TabbedContent).active == "queue"
         await pilot.press("delete")
         await pilot.pause()
-        assert len(app.pending_tracks) == 1 and isinstance(app.screen, PlaybackScreen)
+        assert len(app.playback_queue.pending) == 1 and isinstance(app.screen, PlaybackScreen)
         await pilot.press("escape", "g")
         await pilot.pause()
         assert app.source == "original"
@@ -190,7 +191,7 @@ async def test_retry_restores_failed_song_after_browsing_elsewhere(failure):
         assert "F5" in str(app.query_one("#status", Static).render())
         await pilot.press("f5")
         await pilot.pause()
-        assert app.current == FIRST and app.queue_source == "original"
+        assert app.current == FIRST and app.playback_queue.source == "original"
         assert player.load_options[-1] == (23.5, True)
         assert app.source == Playlist(3, "其他歌单")
         if failure == "disconnected":
@@ -211,10 +212,10 @@ async def test_retry_manual_failure_does_not_advance_base_queue():
         player.fail_load = True
         await pilot.press("n")
         await pilot.pause()
-        assert app.current is None and app.manual_current.track == THIRD
+        assert app.current is None and app.playback_queue.manual.track == THIRD
         await pilot.press("f5")
         await pilot.pause()
-        assert app.current == THIRD and app.index == 0
+        assert app.current == THIRD and app.playback_queue.index == 0
         await pilot.press("n")
         await pilot.pause()
         assert app.current == SECOND
@@ -239,11 +240,11 @@ async def test_retry_failed_next_page_repeats_navigation_without_replacing_visib
         app.query_one("#songs", DataTable).move_cursor(row=1)
         await pilot.press("enter", "n")
         await pilot.pause()
-        assert app.current == SECOND and app.queue_page == 1
+        assert app.current == SECOND and app.playback_queue.page == 1
         library.fail = False
         await pilot.press("f5")
         await pilot.pause()
-        assert app.current == THIRD and app.queue_page == 2
+        assert app.current == THIRD and app.playback_queue.page == 2
         assert app.page == 1
 
 
@@ -256,7 +257,7 @@ async def test_help_and_new_letter_shortcuts_leave_search_input_usable():
         await pilot.press("escape")
         assert app.query_one("#search", Input).value == "aswg"
         assert app.query_one("#search", Input).has_focus
-        assert not app.pending_tracks
+        assert not app.playback_queue.pending
 
 
 async def test_lyrics_follow_current_song_in_the_same_playback_page():
@@ -370,6 +371,6 @@ async def test_replaced_queue_cancels_old_random_queue_preparation():
         await pilot.press("enter")
         finish.set()
         await pilot.pause()
-        assert app.current == THIRD and app.queue_source == new_source
-        assert not app.shuffle_pages
+        assert app.current == THIRD and app.playback_queue.source == new_source
+        assert not app.playback_queue.shuffle_pages
         assert not isinstance(app.screen, PlaybackScreen)

@@ -9,9 +9,10 @@ from test_platform_switch import PlatformLibrary
 from test_playback_features import FeatureAudio, FeatureLibrary
 from textual.widgets import DataTable, TabbedContent, Tabs
 
-from music_tui.app import MusicApp, RepeatMode
+from music_tui.app import MusicApp
 from music_tui.history_screen import HistoryScreen
 from music_tui.playback_screen import PlaybackScreen
+from music_tui.playback_session import RepeatMode
 from music_tui.session import SessionStore
 
 
@@ -112,10 +113,10 @@ async def test_random_queue_result_does_not_override_later_navigation(destinatio
         page, focus = app.screen, app.focused
         finish.set()
         async with asyncio.timeout(2):
-            while not app.shuffle_pages:
+            while not app.playback_queue.shuffle_pages:
                 await pilot.pause()
         assert app.screen is page and app.focused is focus
-        assert app.shuffle_pages[2][0]
+        assert app.playback_queue.shuffle_pages[2][0]
 
 
 async def test_changing_mode_and_reselecting_queue_prepares_random_successors():
@@ -130,12 +131,12 @@ async def test_changing_mode_and_reselecting_queue_prepares_random_successors():
         assert page.query_one("#playback-tabs", TabbedContent).active == "queue"
         await pilot.press("r", "r", "r")
         async with asyncio.timeout(2):
-            while not app.shuffle_pages:
+            while not app.playback_queue.shuffle_pages:
                 await pilot.pause()
         assert app.repeat_mode == RepeatMode.RANDOM
-        app.reset_shuffle(app.index)
+        app.playback_queue.reset_shuffle(app.playback_queue.index)
         await pilot.press("f3")
         async with asyncio.timeout(2):
-            while not app.shuffle_pages:
+            while not app.playback_queue.shuffle_pages:
                 await pilot.pause()
-        assert app.screen is page and app.shuffle_pages[2][0]
+        assert app.screen is page and app.playback_queue.shuffle_pages[2][0]

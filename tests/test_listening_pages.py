@@ -7,10 +7,11 @@ from test_app import FIRST, SECOND, THIRD
 from test_playback_features import FeatureAudio, FeatureLibrary
 from textual.widgets import DataTable, Input, ListView, Static, TabbedContent
 
-from music_tui.app import MusicApp, PlaylistSearch, QualityScreen, RepeatMode
+from music_tui.app import MusicApp, QualityScreen
 from music_tui.history_screen import HistoryScreen
 from music_tui.models import Playlist
 from music_tui.playback_screen import PlaybackScreen
+from music_tui.playback_session import PlaylistSearch, RepeatMode
 from music_tui.screens import HelpScreen, QueuePanel
 from music_tui.session import SessionStore
 
@@ -80,7 +81,7 @@ async def test_player_ignores_hidden_browser_library_actions_and_switching_dispa
         await pilot.pause()
         await pilot.press("s", "a")
         await pilot.pause()
-        assert not library.writes and not app.pending_tracks
+        assert not library.writes and not app.playback_queue.pending
         assert isinstance(app.screen, PlaybackScreen)
         commands = app.player.commands.copy()
         app.switching = True
@@ -109,21 +110,21 @@ async def test_live_queue_reorders_clears_and_tracks_current_song_without_closin
         table = screen.query_one("#queue-items", DataTable)
         table.move_cursor(row=1)
         await pilot.press("ctrl+up")
-        assert [entry.track for entry in app.pending_tracks] == [THIRD, SECOND]
+        assert [entry.track for entry in app.playback_queue.pending] == [THIRD, SECOND]
         assert table.cursor_row == 0
         await pilot.press("ctrl+down")
-        assert [entry.track for entry in app.pending_tracks] == [SECOND, THIRD]
+        assert [entry.track for entry in app.playback_queue.pending] == [SECOND, THIRD]
         assert table.cursor_row == 1
         await pilot.press("delete")
-        assert [entry.track for entry in app.pending_tracks] == [SECOND]
+        assert [entry.track for entry in app.playback_queue.pending] == [SECOND]
         await pilot.press("n")
         await pilot.pause()
         screen.query_one(QueuePanel).refresh_queue()
         assert app.current == SECOND
         assert "第二首" in str(screen.query_one("#queue-current", Static).render())
-        assert app.screen is screen and not app.pending_tracks
+        assert app.screen is screen and not app.playback_queue.pending
         await pilot.press("ctrl+delete")
-        assert app.current == SECOND and app.queue_source == "original"
+        assert app.current == SECOND and app.playback_queue.source == "original"
 
 
 async def test_stale_duplicate_queue_identity_cannot_remove_the_remaining_copy():
@@ -135,11 +136,11 @@ async def test_stale_duplicate_queue_identity_cannot_remove_the_remaining_copy()
         await pilot.pause()
         app.query_one("#songs", DataTable).move_cursor(row=1)
         await pilot.press("a", "a")
-        old = app.pending_tracks[0]
-        other = app.pending_tracks[1]
+        old = app.playback_queue.pending[0]
+        other = app.playback_queue.pending[1]
         await app.play_manual(old, consume=True).wait()
         app.edit_pending_queue("remove", old)
-        assert len(app.pending_tracks) == 1 and app.pending_tracks[0] is other
+        assert len(app.playback_queue.pending) == 1 and app.playback_queue.pending[0] is other
         assert "已离开待播" in app.last_status_message
 
 
@@ -158,7 +159,11 @@ async def test_recent_playback_records_replay_and_reopens_origin_without_audio_c
         app.screen.query_one(ListView).index = 1
         await pilot.press("enter")
         await pilot.pause()
-        assert app.current == FIRST and app.queue == [FIRST] and app.queue_source is None
+        assert (
+            app.current == FIRST
+            and app.playback_queue.tracks == [FIRST]
+            and app.playback_queue.source is None
+        )
         assert app.playback_origin.source == "original"
         assert [record["track"]["mid"] for record in store.history("qq", "account-1")] == ["a", "b"]
         before = app.player.loaded.copy()

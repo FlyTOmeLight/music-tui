@@ -7,8 +7,9 @@ from test_app import FIRST, SECOND
 from test_playback_features import FeatureAudio, FeatureLibrary
 from textual.widgets import Static
 
-from music_tui.app import MusicApp, QueuedTrack
+from music_tui.app import MusicApp
 from music_tui.models import Quality, QualityUnavailableError
+from music_tui.playback_session import QueuedTrack
 from music_tui.session import SessionStore
 
 
@@ -37,7 +38,7 @@ async def test_play_falls_through_tiers_and_next_song_restarts_from_preference(t
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         app.quality = Quality.MASTER
-        app.queue = [FIRST, SECOND]
+        app.playback_queue.tracks = [FIRST, SECOND]
         await app.play_index(0).wait()
         assert music.requests == [(FIRST, quality) for quality in list(Quality)[:5]]
         assert player.loaded == ["a/LOSSLESS"]
@@ -63,7 +64,7 @@ async def test_quality_change_and_retry_use_lower_tiers_preserving_progress_and_
         if manual:
             await app.play_manual(QueuedTrack(FIRST, "original", 1)).wait()
         else:
-            app.queue = [FIRST]
+            app.playback_queue.tracks = [FIRST]
             await app.play_index(0).wait()
         player.properties.update({"time-pos": 23.5, "pause": True})
         command_count = len(player.commands)
@@ -96,7 +97,7 @@ async def test_saved_session_recovery_uses_preference_and_records_actual_tier(tm
         if manual:
             await first.play_manual(QueuedTrack(FIRST, "original", 1)).wait()
         else:
-            first.queue = [FIRST]
+            first.playback_queue.tracks = [FIRST]
             await first.play_index(0).wait()
         first.player.properties.update({"time-pos": 15, "pause": True})
     music = TierLibrary({FIRST: [Quality.STANDARD]})
@@ -121,7 +122,7 @@ async def test_all_unavailable_tiers_stop_at_standard_with_a_clear_error():
     app = MusicApp(music, player)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
-        app.queue = [FIRST]
+        app.playback_queue.tracks = [FIRST]
         app.quality = Quality.MASTER
         await app.play_index(0).wait()
         assert music.requests == [(FIRST, quality) for quality in Quality]
@@ -143,7 +144,7 @@ async def test_exhausted_tiers_preserve_song_and_standard_tier_reason():
     app = MusicApp(UnavailableLibrary({}), FeatureAudio())
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
-        app.queue = [FIRST]
+        app.playback_queue.tracks = [FIRST]
         app.quality = Quality.MASTER
         await app.play_index(0).wait()
         assert FIRST.title in app.last_status_message
@@ -170,7 +171,7 @@ async def test_loading_and_failed_song_identity_stays_visible_until_explicit_ret
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         app.quality = Quality.MASTER
-        app.queue = [FIRST, SECOND]
+        app.playback_queue.tracks = [FIRST, SECOND]
         worker = app.play_manual(QueuedTrack(FIRST, "original", 1)) if manual else app.play_index(0)
         await asyncio.wait_for(started.wait(), 1)
         app.update_player()
@@ -216,7 +217,7 @@ async def test_non_quality_errors_do_not_retry_lower_tiers(error):
     app = MusicApp(music, player)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
-        app.queue = [FIRST]
+        app.playback_queue.tracks = [FIRST]
         app.quality = Quality.LOSSLESS
         await app.play_index(0).wait()
         assert music.requests == [(FIRST, Quality.LOSSLESS)]
@@ -230,7 +231,7 @@ async def test_player_load_error_does_not_resolve_another_tier():
     app = MusicApp(music, player)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
-        app.queue = [FIRST]
+        app.playback_queue.tracks = [FIRST]
         app.quality = Quality.LOSSLESS
         player.fail_load = True
         await app.play_index(0).wait()
@@ -245,7 +246,7 @@ async def test_fallback_does_not_try_tiers_above_the_preference():
     app = MusicApp(music, player)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
-        app.queue = [FIRST]
+        app.playback_queue.tracks = [FIRST]
         app.quality = Quality.HIGH
         await app.play_index(0).wait()
         assert music.requests == [(FIRST, Quality.HIGH), (FIRST, Quality.STANDARD)]
@@ -258,7 +259,7 @@ async def test_reselecting_preferred_tier_retries_a_song_playing_at_a_lower_tier
     app = MusicApp(music, player)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
-        app.queue = [FIRST]
+        app.playback_queue.tracks = [FIRST]
         app.quality = Quality.LOSSLESS
         await app.play_index(0).wait()
         player.properties.update({"time-pos": 17, "pause": True})
@@ -276,7 +277,7 @@ async def test_exhausted_quality_reload_keeps_existing_audio_and_actual_tier():
     app = MusicApp(music, player)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
-        app.queue = [FIRST]
+        app.playback_queue.tracks = [FIRST]
         await app.play_index(0).wait()
         player.properties.update({"time-pos": 27, "pause": True})
         commands_before = list(player.commands)

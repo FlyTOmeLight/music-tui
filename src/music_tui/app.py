@@ -3,10 +3,8 @@
 import argparse
 import asyncio
 import os
-import random
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
-from enum import Enum
+from dataclasses import asdict
 from importlib.metadata import version
 from pathlib import Path
 
@@ -34,7 +32,17 @@ from textual.widgets import (
 from .history_screen import HistoryEntry, HistoryScreen
 from .models import LoginState, Lyrics, Playlist, Quality, QualityUnavailableError, SongPage, Track
 from .netease_config import load_enhanced_config, load_official_config
+from .playback_queue import PlaybackEvents, PlaybackQueue
 from .playback_screen import PlaybackScreen, PlaybackState
+from .playback_session import (
+    PlaybackSnapshot,
+    PlaylistSearch,
+    QueuedTrack,
+    RepeatMode,
+    decode_source,
+    decode_track,
+    encode_source,
+)
 from .player import Player
 from .screens import (
     CreatePlaylistScreen,
@@ -289,61 +297,6 @@ class PlatformScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-@dataclass(frozen=True)
-class PlaylistSearch:
-    playlist: Playlist
-    keyword: str
-    tracks: tuple[Track, ...]
-    playlist_total: int
-
-
-@dataclass(frozen=True)
-class QueuedTrack:
-    """A manually queued song keeps its browsing origin for later navigation."""
-
-    track: Track
-    source: str | Playlist | PlaylistSearch | None
-    page: int
-
-
-def encode_source(source: str | Playlist | PlaylistSearch | None) -> dict | str | None:
-    """Serialize a queue origin without credentials or temporary audio URLs."""
-    if isinstance(source, PlaylistSearch):
-        return {
-            "playlist": asdict(source.playlist),
-            "keyword": source.keyword,
-            "tracks": [asdict(track) for track in source.tracks],
-            "playlist_total": source.playlist_total,
-        }
-    return asdict(source) if isinstance(source, Playlist) else source
-
-
-def decode_track(value: dict) -> Track:
-    """Restore immutable track metadata, including tuple-valued media variants."""
-    return Track(**{**value, "variants": tuple(value.get("variants", ()))})
-
-
-def decode_source(value: dict | str | None) -> str | Playlist | PlaylistSearch | None:
-    """Restore the saved playlist, search query, or complete playlist-filter results."""
-    if not isinstance(value, dict):
-        return value
-    if "playlist" in value:
-        return PlaylistSearch(
-            Playlist(**value["playlist"]),
-            value["keyword"],
-            tuple(decode_track(track) for track in value["tracks"]),
-            value["playlist_total"],
-        )
-    return Playlist(**value)
-
-
-class RepeatMode(Enum):
-    SEQUENCE = "顺序播放"
-    LIST = "列表循环"
-    SINGLE = "单曲循环"
-    RANDOM = "随机播放"
-
-
 class PlaylistItem(ListItem):
     """Keep a rendered sidebar row attached to its playlist identity."""
 
@@ -586,37 +539,25 @@ class MusicApp(App):
         self.page_size = 100
         self.playlist_counts: dict[Playlist, int] = {}
         self.playlist_cache: dict[Playlist, tuple[Track, ...]] = {}
-        self.queue: list[Track] = []
-        self.queue_source: str | Playlist | PlaylistSearch | None = None
-        self.queue_page = 1
-        self.queue_has_more = False
-        self.queue_generation = 0
-        self.index = -1
+        self.playback_queue = PlaybackQueue()
         self.current: Track | None = None
         self.playback_track: Track | None = None
         self.playback_origin: QueuedTrack | None = None
-        self.queue_origin: QueuedTrack | None = None
         self.playback_position = 0.0
         self.playback_paused = False
         self.playback_volume = 70.0
-        self.pending_tracks: list[QueuedTrack] = []
-        self.manual_current: QueuedTrack | None = None
         self.failed_request: tuple[int, int] | None = None
         self.library_busy = False
         self.last_status_message = "按 L 扫码登录以读取个人歌单"
         self.session_saved_at = 0.0
         self.loading = False
-        self.deferred_player_events: list[dict] = []
+        self.playback_events = PlaybackEvents()
         self.now_playing_text = "尚未播放"
         self.quality = Quality.STANDARD
         self.current_quality: Quality | None = None
         self.account_logged_in = False
         self.active_account_id = ""
         self.repeat_mode = RepeatMode.SEQUENCE
-        self.shuffle_pages: dict[int, tuple[list[Track], bool]] = {}
-        self.shuffle_remaining: list[tuple[int, int]] = []
-        self.shuffle_history: list[tuple[int, int]] = []
-        self.shuffle_cursor = -1
 
     def apply_preferences(self) -> None:
         """Restore the selected platform's quality, mode and volume preferences."""
@@ -668,38 +609,27 @@ class MusicApp(App):
             if self.playback_track is None or self.loading:
                 return
 
-            def queued(entry: QueuedTrack) -> dict:
-                """Save a manually queued song together with its navigation context."""
-                return {
-                    "track": asdict(entry.track),
-                    "source": encode_source(entry.source),
-                    "page": entry.page,
-                }
-
+            queue = self.playback_queue
+            snapshot = PlaybackSnapshot(
+                queue=queue.tracks,
+                source=queue.source,
+                page=queue.page,
+                has_more=queue.has_more,
+                index=queue.index,
+                track=self.playback_track,
+                position=self.playback_position,
+                paused=self.playback_paused,
+                pending=queue.pending,
+                manual=queue.manual,
+                origin=self.playback_origin,
+                queue_origin=queue.origin,
+                shuffle_pages=queue.shuffle_pages,
+                shuffle_remaining=queue.shuffle_remaining,
+                shuffle_history=queue.shuffle_history,
+                shuffle_cursor=queue.shuffle_cursor,
+            )
             self.session_store.save_session(
-                self.source_key,
-                self.active_account_id,
-                {
-                    "queue": [asdict(track) for track in self.queue],
-                    "source": encode_source(self.queue_source),
-                    "page": self.queue_page,
-                    "has_more": self.queue_has_more,
-                    "index": self.index,
-                    "track": asdict(self.playback_track),
-                    "position": self.playback_position,
-                    "paused": self.playback_paused,
-                    "pending": [queued(entry) for entry in self.pending_tracks],
-                    "manual": queued(self.manual_current) if self.manual_current else None,
-                    "origin": queued(self.playback_origin) if self.playback_origin else None,
-                    "queue_origin": queued(self.queue_origin) if self.queue_origin else None,
-                    "shuffle_pages": {
-                        str(page): {"tracks": [asdict(t) for t in tracks], "more": more}
-                        for page, (tracks, more) in self.shuffle_pages.items()
-                    },
-                    "shuffle_remaining": self.shuffle_remaining,
-                    "shuffle_history": self.shuffle_history,
-                    "shuffle_cursor": self.shuffle_cursor,
-                },
+                self.source_key, self.active_account_id, snapshot.encode()
             )
         except (OSError, ValueError) as error:
             self.status(f"无法保存播放状态：{error_text(error)}")
@@ -1349,17 +1279,10 @@ class MusicApp(App):
         if not self.ready:
             self.status("播放器尚未就绪")
             return
-        self.queue = self.tracks.copy()
-        self.queue_origin = None
-        self.queue_generation += 1
+        index = int(event.row_key.value)
+        self.playback_queue.replace(self.tracks, self.source, self.page, self.has_more, index)
         self.workers.cancel_group(self, "queue-view")
         self.loading = True
-        self.pending_tracks.clear()
-        self.manual_current = None
-        self.queue_source, self.queue_page = self.source, self.page
-        self.queue_has_more = self.has_more
-        index = int(event.row_key.value)
-        self.reset_shuffle(index)
         self.play_index(index)
 
     @work(exclusive=True, group="play")
@@ -1375,59 +1298,26 @@ class MusicApp(App):
         try:
             if shuffle:
                 self.status("正在准备整个列表的随机顺序…")
-                page, index = await self.shuffle_position(shuffle)
-                tracks, more = self.shuffle_pages[page]
-                self.queue, self.queue_page, self.queue_has_more = tracks, page, more
-            tracks, page, more = self.queue, self.queue_page, self.queue_has_more
-            if index >= len(tracks):
-                if more and self.queue_source is not None:
-                    page += 1
-                    result = await self.fetch(self.queue_source, page)
-                    tracks, more = result.tracks, result.has_more
-                    index = 0
-                if not tracks or index >= len(tracks):
-                    if self.repeat_mode == RepeatMode.LIST:
-                        page = 1
-                        if self.queue_source is not None:
-                            result = await self.fetch(self.queue_source, page)
-                            tracks, more = result.tracks, result.has_more
-                        index = 0
-            elif index < 0:
-                if page > 1 and self.queue_source is not None:
-                    page -= 1
-                    result = await self.fetch(self.queue_source, page)
-                    tracks, more = result.tracks, result.has_more
-                elif self.repeat_mode == RepeatMode.LIST:
-                    # The API supplies a next-page flag, so discover the final page on demand.
-                    while more and self.queue_source is not None:
-                        page += 1
-                        result = await self.fetch(self.queue_source, page)
-                        tracks, more = result.tracks, result.has_more
-                        if not tracks:
-                            break
-                index = len(tracks) - 1 if page > 1 or self.repeat_mode == RepeatMode.LIST else 0
-            if not 0 <= index < len(tracks):
+            track = await self.playback_queue.resolve(
+                index, self.repeat_mode, self.fetch, shuffle=shuffle
+            )
+            if track is None:
                 await self.player.command("stop")
                 self.current = None
                 self.current_quality = None
-                self.manual_current = None
                 self.playback_track = None
                 self.playback_origin = None
                 self.failed_request = None
-                self.index = len(self.queue) - 1
                 self.status("播放队列已结束")
                 return
-            self.queue, self.queue_page, self.queue_has_more = tracks, page, more
-            self.index = index
-            track = self.queue[index]
-            self.manual_current = None
+            index = self.playback_queue.index
             resolved = True
             origin = (
-                self.queue_origin
+                self.playback_queue.origin
                 if (
-                    self.queue_source is None
-                    and self.queue_origin is not None
-                    and self.queue_origin.track == track
+                    self.playback_queue.source is None
+                    and self.playback_queue.origin is not None
+                    and self.playback_queue.origin.track == track
                 )
                 else None
             )
@@ -1450,8 +1340,8 @@ class MusicApp(App):
         if not resume or origin is not None:
             self.playback_origin = (
                 origin
-                or self.manual_current
-                or QueuedTrack(track, self.queue_source, self.queue_page)
+                or self.playback_queue.manual
+                or QueuedTrack(track, self.playback_queue.source, self.playback_queue.page)
             )
         if resume and self.current is not None:
             self.playback_position = float(self.player.properties.get("time-pos") or 0)
@@ -1501,10 +1391,10 @@ class MusicApp(App):
         self.loading = True
         try:
             if consume:
-                if not self.pending_tracks:
+                if not self.playback_queue.pending:
                     return
-                entry = self.pending_tracks.pop(0)
-            self.manual_current = entry
+                entry = self.playback_queue.pending.pop(0)
+            self.playback_queue.manual = entry
             self.failed_request = None
             await self.load_track(entry.track, self.quality, resume=resume)
         except Exception as error:
@@ -1522,7 +1412,7 @@ class MusicApp(App):
         try:
             if not self.ready:
                 await self.player.close()
-                self.deferred_player_events.clear()
+                self.playback_events.reset()
                 while not self.player.events.empty():
                     self.player.events.get_nowait()
                 await self.player.start()
@@ -1531,7 +1421,7 @@ class MusicApp(App):
                 self.status("播放器已恢复，请选择歌曲播放")
             if self.failed_request is not None:
                 index, shuffle = self.failed_request
-                if index != self.index or shuffle:
+                if index != self.playback_queue.index or shuffle:
                     await self.resolve_index(index, shuffle=shuffle)
                     return
             if self.playback_track is not None:
@@ -1546,25 +1436,17 @@ class MusicApp(App):
         if not self.is_running or self.switching:
             return
         self.remember_playback()
-        events = [] if self.loading else self.deferred_player_events
-        if not self.loading:
-            self.deferred_player_events = []
-        while not self.player.events.empty():
-            event = self.player.events.get_nowait()
-            if event.get("event") == "end-file" and self.loading:
-                self.deferred_player_events.append(event)
-            else:
-                events.append(event)
+        events = self.playback_events.drain(self.player.events, loading=self.loading)
         for event in events:
             if event.get("event") == "end-file":
                 if event.get("playlist_entry_id") != self.player.entry_id:
                     continue
                 if event.get("reason") == "eof" and self.current:
                     if self.repeat_mode == RepeatMode.SINGLE:
-                        if self.manual_current is not None:
-                            self.play_manual(self.manual_current)
+                        if self.playback_queue.manual is not None:
+                            self.play_manual(self.playback_queue.manual)
                         else:
-                            self.play_index(self.index)
+                            self.play_index(self.playback_queue.index)
                     else:
                         self.action_next()
                 elif event.get("reason") == "error":
@@ -1642,20 +1524,22 @@ class MusicApp(App):
 
     def action_next(self) -> None:
         """Advance through the queue or the existing shuffle sequence."""
-        if self.pending_tracks:
-            self.play_manual(self.pending_tracks[0], consume=True)
-        elif self.queue:
+        if self.playback_queue.pending:
+            self.play_manual(self.playback_queue.pending[0], consume=True)
+        elif self.playback_queue.tracks:
             self.play_index(
-                self.index + 1, shuffle=1 if self.repeat_mode == RepeatMode.RANDOM else 0
+                self.playback_queue.index + 1,
+                shuffle=1 if self.repeat_mode == RepeatMode.RANDOM else 0,
             )
 
     def action_previous(self) -> None:
         """Return to the previous queue track or shuffle-history entry."""
-        if self.manual_current is not None and self.queue:
-            self.play_index(self.index)
-        elif self.queue:
+        if self.playback_queue.manual is not None and self.playback_queue.tracks:
+            self.play_index(self.playback_queue.index)
+        elif self.playback_queue.tracks:
             self.play_index(
-                self.index - 1, shuffle=-1 if self.repeat_mode == RepeatMode.RANDOM else 0
+                self.playback_queue.index - 1,
+                shuffle=-1 if self.repeat_mode == RepeatMode.RANDOM else 0,
             )
 
     def action_seek(self, seconds: int) -> None:
@@ -1718,10 +1602,10 @@ class MusicApp(App):
         self.quality = quality
         self.update_heading()
         if self.current or self.loading:
-            if self.manual_current is not None:
-                self.play_manual(self.manual_current, resume=self.current is not None)
+            if self.playback_queue.manual is not None:
+                self.play_manual(self.playback_queue.manual, resume=self.current is not None)
             else:
-                self.play_index(self.index, resume=self.current is not None)
+                self.play_index(self.playback_queue.index, resume=self.current is not None)
         else:
             self.status(
                 f"已选择 {quality.label}，按 F5 重试当前歌曲"
@@ -1768,7 +1652,7 @@ class MusicApp(App):
         if track is None:
             self.status("请先选中一首歌曲，再按 A 加入待播队列")
             return
-        self.pending_tracks.append(QueuedTrack(track, self.source, self.page))
+        self.playback_queue.pending.append(QueuedTrack(track, self.source, self.page))
         self.status(f"已加入手动待播：{track.title} · F3 查看 · N 播放下一首")
         self.save_state()
 
@@ -1780,29 +1664,18 @@ class MusicApp(App):
     @work(exclusive=True, group="queue-view")
     async def prepare_queue(self) -> None:
         """Prepare random successors without changing the user's page or keyboard focus."""
-        if self.repeat_mode == RepeatMode.RANDOM and self.queue:
+        if self.repeat_mode == RepeatMode.RANDOM and self.playback_queue.tracks:
             try:
                 self.status("正在准备随机待播队列…")
-                await self.prepare_shuffle()
-                self.fill_shuffle_remaining()
+                await self.playback_queue.prepare_shuffle(self.fetch)
+                self.playback_queue.fill_shuffle_remaining()
             except Exception as error:
                 self.status(error_text(error))
 
     def get_queue_state(self) -> QueueState:
         """Expose current manual entries and known source successors for live queue views."""
-        if self.repeat_mode == RepeatMode.RANDOM and self.shuffle_pages:
-            positions = self.shuffle_history[self.shuffle_cursor + 1 :] + list(
-                reversed(self.shuffle_remaining)
-            )
-            upcoming = [self.shuffle_pages[page][0][index] for page, index in positions]
-            more = False
-        elif self.repeat_mode == RepeatMode.RANDOM:
-            upcoming = []
-            more = self.queue_has_more
-        else:
-            upcoming = self.queue[self.index + 1 :]
-            more = self.queue_has_more
-        source = self.queue_source or (
+        upcoming, more = self.playback_queue.upcoming(self.repeat_mode)
+        source = self.playback_queue.source or (
             self.playback_origin.source if self.playback_origin is not None else None
         )
         label = self.source_label(source) or "手动待播"
@@ -1811,7 +1684,7 @@ class MusicApp(App):
 
         return QueueState(
             self.current,
-            tuple(QueueItem(entry, entry.track) for entry in self.pending_tracks),
+            tuple(QueueItem(entry, entry.track) for entry in self.playback_queue.pending),
             tuple(upcoming),
             more,
             label,
@@ -1822,23 +1695,25 @@ class MusicApp(App):
         if self.switching:
             return
         if action == "clear":
-            self.pending_tracks.clear()
+            self.playback_queue.pending.clear()
             self.status("已清空手动待播，当前歌曲和原列表继续播放")
         else:
-            index = next((i for i, entry in enumerate(self.pending_tracks) if entry is key), None)
+            index = next(
+                (i for i, entry in enumerate(self.playback_queue.pending) if entry is key), None
+            )
             if index is None:
                 self.status("这首歌已离开待播队列，请选择当前的待播项")
                 return
             if action == "remove":
-                entry = self.pending_tracks.pop(index)
+                entry = self.playback_queue.pending.pop(index)
                 self.status(f"已移除手动待播：{entry.track.title}")
             elif action in ("up", "down"):
                 destination = index + (-1 if action == "up" else 1)
-                if not 0 <= destination < len(self.pending_tracks):
+                if not 0 <= destination < len(self.playback_queue.pending):
                     return
-                self.pending_tracks[index], self.pending_tracks[destination] = (
-                    self.pending_tracks[destination],
-                    self.pending_tracks[index],
+                self.playback_queue.pending[index], self.playback_queue.pending[destination] = (
+                    self.playback_queue.pending[destination],
+                    self.playback_queue.pending[index],
                 )
                 self.status("已调整手动待播顺序")
             else:
@@ -1868,9 +1743,9 @@ class MusicApp(App):
         if next_track is None:
             if self.repeat_mode == RepeatMode.SINGLE and track is not None:
                 hint = "当前歌曲结束后重播；N 可手动切歌"
-            elif self.queue and self.repeat_mode == RepeatMode.RANDOM:
+            elif self.playback_queue.tracks and self.repeat_mode == RepeatMode.RANDOM:
                 hint = "下一首按随机顺序选择"
-            elif self.queue and self.repeat_mode == RepeatMode.LIST:
+            elif self.playback_queue.tracks and self.repeat_mode == RepeatMode.LIST:
                 hint = "列表结束后从开头继续"
             elif queue.has_more:
                 hint = "下一首将从后续页面加载"
@@ -1902,7 +1777,7 @@ class MusicApp(App):
             ready=self.ready,
             active=self.current is not None,
             status=self.last_status_message,
-            pending_count=len(self.pending_tracks),
+            pending_count=len(self.playback_queue.pending),
             next_track=next_track,
             next_hint=hint,
             can_add_to_playlist=self.account_logged_in,
@@ -1990,8 +1865,8 @@ class MusicApp(App):
         if self.session_store is None:
             return
         origin = self.playback_origin
-        source = origin.source if origin else self.queue_source
-        page = origin.page if origin else self.queue_page
+        source = origin.source if origin else self.playback_queue.source
+        page = origin.page if origin else self.playback_queue.page
         if isinstance(source, PlaylistSearch):
             source, page = source.playlist, 1
         try:
@@ -2054,15 +1929,9 @@ class MusicApp(App):
         try:
             track = decode_track(record["track"])
             origin = QueuedTrack(track, decode_source(record["source"]), int(record["page"]))
-            self.queue_generation += 1
             self.workers.cancel_group(self, "queue-view")
-            self.queue, self.queue_source, self.queue_page = [track], None, 1
-            self.queue_origin = origin
-            self.queue_has_more, self.index = False, 0
-            self.pending_tracks.clear()
-            self.manual_current = None
+            self.playback_queue.replace([track], None, 1, False, 0, origin=origin)
             self.failed_request = None
-            self.reset_shuffle(0)
             await self.load_track(track, self.quality, origin=origin)
         except Exception as error:
             self.status(f"{error_text(error)} · F5 重试")
@@ -2077,9 +1946,11 @@ class MusicApp(App):
         if track is None:
             self.status("尚未播放歌曲")
             return
-        origin = self.playback_origin or self.manual_current
+        origin = self.playback_origin or self.playback_queue.manual
         source, page = (
-            (origin.source, origin.page) if origin else (self.queue_source, self.queue_page)
+            (origin.source, origin.page)
+            if origin
+            else (self.playback_queue.source, self.playback_queue.page)
         )
         if source is None:
             self.status("当前歌曲没有浏览来源")
@@ -2203,64 +2074,18 @@ class MusicApp(App):
                 self.status("当前账号没有已保存的播放会话")
                 return
 
-            def queued(value: dict) -> QueuedTrack:
-                """Decode a saved manual song with its original browsing location."""
-                return QueuedTrack(
-                    decode_track(value["track"]), decode_source(value["source"]), int(value["page"])
-                )
-
-            tracks = [decode_track(value) for value in snapshot["queue"]]
-            source = decode_source(snapshot["source"])
-            index, page = int(snapshot["index"]), int(snapshot["page"])
-            track = decode_track(snapshot["track"])
-            position = max(0, float(snapshot["position"]))
-            pending = [queued(value) for value in snapshot["pending"]]
-            manual = queued(snapshot["manual"]) if snapshot["manual"] else None
-            origin = (
-                queued(snapshot["origin"])
-                if snapshot.get("origin")
-                else (manual or QueuedTrack(track, source, page))
-            )
-            queue_origin = (
-                queued(snapshot["queue_origin"])
-                if snapshot.get("queue_origin")
-                else (origin if source is None and manual is None else None)
-            )
-            pages = {
-                int(key): ([decode_track(value) for value in entry["tracks"]], entry["more"])
-                for key, entry in snapshot["shuffle_pages"].items()
-            }
-            remaining = [tuple(value) for value in snapshot["shuffle_remaining"]]
-            history = [tuple(value) for value in snapshot["shuffle_history"]]
-            cursor = int(snapshot["shuffle_cursor"])
-            if page < 1 or (tracks and not 0 <= index < len(tracks)):
-                raise ValueError("保存的播放队列位置无效")
-            if manual is None and (not tracks or tracks[index] != track):
-                raise ValueError("保存的当前歌曲与播放队列不一致")
-            if manual is not None and manual.track != track:
-                raise ValueError("保存的手动待播歌曲无效")
-            for saved_page, saved_index in remaining + history:
-                if pages and not 0 <= saved_index < len(pages[saved_page][0]):
-                    raise ValueError("保存的随机播放位置无效")
-            if history and not 0 <= cursor < len(history):
-                raise ValueError("保存的随机播放历史无效")
+            snapshot = PlaybackSnapshot.decode(snapshot)
             self.workers.cancel_group(self, "control")
             self.loading = True
-            self.queue_generation += 1
             self.workers.cancel_group(self, "queue-view")
             await self.player.command("stop")
             self.current = None
             self.current_quality = None
-            self.queue, self.queue_source = tracks, source
-            self.queue_page, self.queue_has_more, self.index = page, snapshot["has_more"], index
-            self.pending_tracks, self.manual_current = pending, manual
-            self.playback_origin = origin
-            self.queue_origin = queue_origin
-            self.shuffle_pages, self.shuffle_remaining = pages, remaining
-            self.shuffle_history, self.shuffle_cursor = history, cursor
-            self.playback_position, self.playback_paused = position, bool(snapshot["paused"])
+            self.playback_queue.restore(snapshot)
+            self.playback_origin = snapshot.origin
+            self.playback_position, self.playback_paused = snapshot.position, snapshot.paused
             self.failed_request = None
-            await self.load_track(track, self.quality, resume=True)
+            await self.load_track(snapshot.track, self.quality, resume=True)
         except (KeyError, TypeError, IndexError) as error:
             self.status(f"保存的播放会话无效（{type(error).__name__}）")
         except Exception as error:
@@ -2281,73 +2106,13 @@ class MusicApp(App):
             f"{appearance}"
         )
 
-    def reset_shuffle(self, index: int) -> None:
-        """Clear cached shuffle choices and seed history with the selected track."""
-        self.shuffle_pages = {}
-        self.shuffle_remaining = []
-        self.shuffle_history = [(self.queue_page, index)] if self.queue else []
-        self.shuffle_cursor = len(self.shuffle_history) - 1
-
-    async def prepare_shuffle(self) -> None:
-        """Cache complete source pages before listing or selecting random next songs."""
-        if not self.shuffle_pages:
-            # Load the full list once; choosing pages at random would bias short pages.
-            generation = self.queue_generation
-            source = self.queue_source
-            pages = {self.queue_page: (self.queue.copy(), self.queue_has_more)}
-            if source is not None:
-                page, more = 1, True
-                while more:
-                    if page not in pages:
-                        result = await self.fetch(source, page)
-                        pages[page] = (result.tracks, result.has_more)
-                    tracks, more = pages[page]
-                    if not tracks:
-                        break
-                    page += 1
-            if generation != self.queue_generation:
-                raise asyncio.CancelledError
-            self.shuffle_pages = pages
-
-    def fill_shuffle_remaining(self) -> None:
-        """Prepare one nonrepeating random round, retaining any already chosen order."""
-        if self.shuffle_remaining:
-            return
-        current = (self.queue_page, self.index)
-        positions = [
-            (page, index)
-            for page, (tracks, _) in self.shuffle_pages.items()
-            for index in range(len(tracks))
-        ]
-        if len(positions) > 1 and len(self.shuffle_history) == 1:
-            positions.remove(current)
-        random.shuffle(positions)
-        if len(positions) > 1 and positions[-1] == current:
-            positions[0], positions[-1] = positions[-1], positions[0]
-        self.shuffle_remaining = positions
-
-    async def shuffle_position(self, direction: int) -> tuple[int, int]:
-        """Traverse shuffle history or choose uniformly from all queue positions."""
-        await self.prepare_shuffle()
-        if direction < 0:
-            self.shuffle_cursor = max(0, self.shuffle_cursor - 1)
-            return self.shuffle_history[self.shuffle_cursor]
-        if self.shuffle_cursor + 1 < len(self.shuffle_history):
-            self.shuffle_cursor += 1
-            return self.shuffle_history[self.shuffle_cursor]
-        self.fill_shuffle_remaining()
-        position = self.shuffle_remaining.pop()
-        self.shuffle_history.append(position)
-        self.shuffle_cursor += 1
-        return position
-
     def action_repeat(self) -> None:
         """Cycle playback modes and reset shuffle state when entering random mode."""
         self.workers.cancel_group(self, "queue-view")
         modes = list(RepeatMode)
         self.repeat_mode = modes[(modes.index(self.repeat_mode) + 1) % len(modes)]
         if self.repeat_mode == RepeatMode.RANDOM:
-            self.reset_shuffle(self.index)
+            self.playback_queue.reset_shuffle(self.playback_queue.index)
         self.update_heading()
         self.status(f"{self.repeat_mode.value} · 作用于正在播放的整个列表")
         if (

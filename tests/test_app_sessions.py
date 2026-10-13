@@ -7,8 +7,9 @@ from test_app import FIRST, SECOND, THIRD
 from test_playback_features import FeatureAudio, FeatureLibrary
 from textual.widgets import Static
 
-from music_tui.app import MusicApp, PlaylistSearch, RepeatMode
+from music_tui.app import MusicApp
 from music_tui.models import Playlist, Quality
+from music_tui.playback_session import PlaylistSearch, RepeatMode
 from music_tui.session import SessionStore
 
 
@@ -47,9 +48,9 @@ async def test_restart_recovers_queue_progress_and_manual_pending_without_autopl
         await pilot.pause()
         assert second.current == (THIRD if manual else FIRST)
         assert player.load_options[-1] == (18.25, True)
-        assert second.queue_source == "original" and second.index == 0
-        assert len(second.pending_tracks) == (1 if manual else 2)
-        while second.pending_tracks:
+        assert second.playback_queue.source == "original" and second.playback_queue.index == 0
+        assert len(second.playback_queue.pending) == (1 if manual else 2)
+        while second.playback_queue.pending:
             await pilot.press("n")
             await pilot.pause()
         await pilot.press("n")
@@ -72,16 +73,19 @@ async def test_restored_filter_queue_and_shuffle_keep_their_saved_order(tmp_path
         app.player.properties["time-pos"] = 12
         app.update_player()
         current = app.current
-        history = app.shuffle_history.copy()
-        remaining = app.shuffle_remaining.copy()
+        history = app.playback_queue.shuffle_history.copy()
+        remaining = app.playback_queue.shuffle_remaining.copy()
 
     restored = MusicApp(FeatureLibrary(), FeatureAudio(), session_store=store)
     async with restored.run_test() as pilot:
         await pilot.press("f6")
         await pilot.pause()
         assert restored.current == current
-        assert restored.shuffle_history == history and restored.shuffle_remaining == remaining
-        assert restored.queue_source == source
+        assert (
+            restored.playback_queue.shuffle_history == history
+            and restored.playback_queue.shuffle_remaining == remaining
+        )
+        assert restored.playback_queue.source == source
         await pilot.press("p")
         await pilot.pause()
         assert restored.current == FIRST
@@ -108,6 +112,27 @@ async def test_other_account_cannot_resume_previous_accounts_session(tmp_path):
         await pilot.pause()
         assert not second.player.loaded
         assert "没有已保存" in str(second.query_one("#status", Static).render())
+
+
+async def test_sequential_session_resumes_after_crossing_a_source_page(tmp_path):
+    """Recover a later sequential page even when unused shuffle history names page one."""
+    store = SessionStore(tmp_path)
+    first = MusicApp(FeatureLibrary(), FeatureAudio(), session_store=store)
+    async with first.run_test() as pilot:
+        await first.load_view("original").wait()
+        await pilot.press("enter", "n", "n")
+        await first.workers.wait_for_complete()
+        assert first.current == THIRD and first.playback_queue.page == 2
+        first.player.properties["time-pos"] = 17
+        first.save_state()
+
+    restored = MusicApp(FeatureLibrary(), FeatureAudio(), session_store=store)
+    async with restored.run_test() as pilot:
+        await restored.workers.wait_for_complete()
+        await pilot.press("f6")
+        await restored.workers.wait_for_complete()
+        assert restored.current == THIRD and restored.playback_queue.page == 2
+        assert restored.player.load_options[-1] == (17, False)
 
 
 async def test_invalid_snapshot_does_not_stop_existing_audio(tmp_path):
@@ -153,7 +178,7 @@ async def test_platform_switch_saves_session_and_restores_each_platforms_prefere
         app.player.properties.update({"time-pos": 19, "volume": 32})
         await app.switch_platform("netease-enhanced").wait()
         assert app.quality == Quality.STANDARD and app.repeat_mode == RepeatMode.SEQUENCE
-        assert app.current is None and not app.queue
+        assert app.current is None and not app.playback_queue.tracks
         app.quality = Quality.HIGH
         app.player.properties["volume"] = 48
         await app.switch_platform("qq").wait()
@@ -178,7 +203,7 @@ async def test_relogin_as_another_account_keeps_saved_queue_isolated(tmp_path):
         library.account_id = "account-2"
         await app.logged_in(True).wait()
         await pilot.pause()
-        assert app.current is None and not app.queue
+        assert app.current is None and not app.playback_queue.tracks
         assert app.active_account_id == "account-2"
         assert store.load_session("qq", "account-1")["position"] == 21
         assert store.load_session("qq", "account-2") is None

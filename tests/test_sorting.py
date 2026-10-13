@@ -98,20 +98,20 @@ async def test_keyboard_sort_library_actions_and_locate_use_visible_song_identit
         table = app.query_one("#songs", DataTable)
         await pilot.press("o")
         assert displayed_ids(table) == ["a", "b", "z"]
-        assert app.current == TRACKS[0] and app.queue == TRACKS
+        assert app.current == TRACKS[0] and app.playback_queue.tracks == TRACKS
         assert app.selected_track() == TRACKS[0]
         assert "▸" in str(table.get_cell("0", "position"))
         table.move_cursor(row=0)
         await pilot.press("a", "s")
         await pilot.pause()
-        assert app.pending_tracks[0].track == TRACKS[2]
+        assert app.playback_queue.pending[0].track == TRACKS[2]
         assert library.writes[-1] == ("like", TRACKS[2], True)
         await pilot.press("w")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
         assert library.writes[-1] == ("add", TRACKS[2], library.editable)
-        assert app.queue == TRACKS and app.current == TRACKS[0]
+        assert app.playback_queue.tracks == TRACKS and app.current == TRACKS[0]
         await pilot.press("g")
         await pilot.pause()
         assert table.cursor_row == 2 and app.selected_track() == TRACKS[0]
@@ -119,7 +119,7 @@ async def test_keyboard_sort_library_actions_and_locate_use_visible_song_identit
         await pilot.press("enter")
         await pilot.pause()
         assert player.loaded[-1] == "a" and app.current == TRACKS[2]
-        assert app.queue == TRACKS
+        assert app.playback_queue.tracks == TRACKS
 
 
 async def test_sort_control_cycles_back_to_original_and_applies_only_to_loaded_page():

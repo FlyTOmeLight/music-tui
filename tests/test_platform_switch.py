@@ -6,8 +6,9 @@ import pytest
 from test_app import Audio, Library
 from textual.widgets import Button, DataTable, Input, Label, ListView, Static
 
-from music_tui.app import MusicApp, RepeatMode
+from music_tui.app import MusicApp
 from music_tui.models import Playlist, Quality, SongPage, Track
+from music_tui.playback_session import RepeatMode
 
 
 class PlatformLibrary(Library):
@@ -65,9 +66,9 @@ async def test_switch_platform_and_return_restore_accounts_and_clear_old_state(t
         app.playlist_cache[original.playlist] = (original.track,)
         app.quality = Quality.LOSSLESS
         app.repeat_mode = RepeatMode.RANDOM
-        app.shuffle_pages = {1: ([original.track], False)}
-        app.shuffle_remaining = [(1, 0)]
-        app.shuffle_history = [(1, 0)]
+        app.playback_queue.shuffle_pages = {1: ([original.track], False)}
+        app.playback_queue.shuffle_remaining = [(1, 0)]
+        app.playback_queue.shuffle_history = [(1, 0)]
         app.query_one("#search", Input).value = "旧平台搜索"
         before = len(player.commands)
 
@@ -79,10 +80,18 @@ async def test_switch_platform_and_return_restore_accounts_and_clear_old_state(t
         assert app.account_logged_in
         assert app.playlists == [created[0].playlist]
         assert app.tracks == [created[0].track]
-        assert app.current is None and app.queue == [] and app.queue_source is None
+        assert (
+            app.current is None
+            and app.playback_queue.tracks == []
+            and app.playback_queue.source is None
+        )
         assert original.playlist not in app.playlist_cache
         assert original.playlist not in app.playlist_counts
-        assert not app.shuffle_pages and not app.shuffle_remaining and not app.shuffle_history
+        assert (
+            not app.playback_queue.shuffle_pages
+            and not app.playback_queue.shuffle_remaining
+            and not app.playback_queue.shuffle_history
+        )
         assert app.quality == Quality.STANDARD
         assert app.query_one("#search", Input).value == ""
         assert ("stop",) in player.commands[before:]
@@ -121,7 +130,7 @@ async def test_switch_failure_keeps_current_account_and_playback(failure):
         await pilot.pause()
         assert app.music is original and original.closed == 0
         assert app.current == original.track
-        assert app.queue == [original.track]
+        assert app.playback_queue.tracks == [original.track]
         assert app.playlists == [original.playlist]
         assert player.commands == before
         assert candidate.closed == (failure == "restore")
