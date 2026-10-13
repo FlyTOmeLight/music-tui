@@ -563,7 +563,7 @@ class MusicApp(App):
         if self.appearance != "system":
             return
         theme = await detect_system_theme()
-        if self.appearance != "system":
+        if not self.is_running or self.appearance != "system":
             return
         if theme is None:
             self._system_theme_unavailable = True

@@ -14,6 +14,37 @@ from music_tui.playback_screen import PlaybackScreen
 from music_tui.session import SessionStore
 
 
+@pytest.mark.parametrize("theme", [None, "music-day"])
+async def test_system_appearance_result_during_shutdown_does_not_update_removed_widgets(
+    monkeypatch, theme
+):
+    """Finish delayed theme detection after widget removal without failing application shutdown."""
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def detect():
+        """Return a native theme only after shutdown has removed the interface."""
+        started.set()
+        await release.wait()
+        return theme
+
+    monkeypatch.setattr("music_tui.app.detect_system_theme", detect)
+    app = MusicApp(Library(), FeatureAudio())
+    close_all = app._close_all
+    worker = None
+
+    async def close_widgets():
+        """Expose the real shutdown window before the background workers are cancelled."""
+        await close_all()
+        release.set()
+        await worker.wait()
+
+    monkeypatch.setattr(app, "_close_all", close_widgets)
+    async with app.run_test(size=(80, 24)):
+        async with asyncio.timeout(2):
+            await started.wait()
+        worker = next(worker for worker in app.workers if worker.name == "update_system_theme")
+
+
 async def test_delayed_system_appearance_failure_preserves_playback_error(monkeypatch):
     """Report unreadable system appearance in the heading without hiding a newer playback error."""
     started, release = asyncio.Event(), asyncio.Event()
