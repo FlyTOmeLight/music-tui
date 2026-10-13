@@ -72,15 +72,15 @@ class SessionStore:
         self._write("preferences.json", value)
 
     def theme(self) -> str:
-        """Return the global appearance preference, following the system on first use."""
+        """Follow the system on first use or when a saved theme is no longer supported."""
         theme = self._preferences().get("theme", "system")
-        if theme not in ("system", "music-night", "music-day", "music-glass"):
-            raise ValueError("保存的界面主题无效")
+        if theme not in ("system", "music-night", "music-day"):
+            return "system"
         return theme
 
     def save_theme(self, theme: str) -> None:
         """Save appearance independently from platform and account preferences."""
-        if theme not in ("system", "music-night", "music-day", "music-glass"):
+        if theme not in ("system", "music-night", "music-day"):
             raise ValueError("界面主题无效")
         value = self._preferences()
         value["theme"] = theme

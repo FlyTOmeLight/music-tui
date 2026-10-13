@@ -80,7 +80,6 @@ class HelpScreen(ModalScreen[None]):
                     "Ctrl+N  新建歌单    歌单侧栏可按累计播放量排序\n"
                     "Ctrl+R  刷新当前列表    L  扫码登录\n"
                     "F2  切换音乐平台    F9  昼夜模式    Q  退出\n\n"
-                    "Ctrl+F9  玻璃主题    Shift+F9  跟随系统\n\n"
                     "搜索框中可正常输入字母和方括号；先按 Esc 返回列表，再使用快捷键。",
                     markup=False,
                 )

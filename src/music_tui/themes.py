@@ -57,37 +57,6 @@ DAY = Theme(
 )
 
 
-GLASS = Theme(
-    name="music-glass",
-    primary="#a6dedb",
-    accent="#a6dedb",
-    secondary="#b3c4d5",
-    foreground="#edf3f8",
-    background="ansi_default",
-    surface="ansi_default",
-    panel="ansi_default",
-    boost="ansi_default",
-    dark=True,
-    variables={
-        "text-muted": "#b3c4d5",
-        "border": "#718898",
-        "border-blurred": "#718898",
-        "primary-muted": "#29454e",
-        "block-cursor-background": "#29454e",
-        "block-cursor-foreground": "#edf3f8",
-        "input-cursor-background": "#a6dedb",
-        "input-cursor-foreground": "#101827",
-        "input-selection-background": "#29454e",
-        "footer-key-foreground": "#a6dedb",
-        "music-row": "ansi_default",
-        "scrollbar-background": "ansi_default",
-        "scrollbar-background-hover": "ansi_default",
-        "scrollbar-background-active": "ansi_default",
-        "scrollbar-corner-color": "ansi_default",
-    },
-)
-
-
 async def _theme_command(*command: str) -> bytes | None:
     """Read a native preference command without blocking or leaving timed-out processes."""
     process = await asyncio.create_subprocess_exec(
