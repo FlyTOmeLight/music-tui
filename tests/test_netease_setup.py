@@ -53,7 +53,7 @@ def test_prepare_automates_local_fields_and_limits_defaults(prepared):
     defaults = json.loads((target / "defaults.json").read_text())
     assert len(defaults["deviceId"]) == 32
     assert defaults["deviceId"].isalnum()
-    assert defaults["appVer"] == version("music-tui")
+    assert defaults["appVer"] == version("melody-tui")
     assert defaults["model"] == "LocalModel"
     assert defaults["clientIp"] == "192.168.1.2"
     assert defaults["netStatus"] == "wifi"

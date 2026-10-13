@@ -1,5 +1,10 @@
 # 更新记录
 
+## v0.4.3
+
+- PyPI 发布包改名为 `melody-tui`，保留 `music-tui` 命令、`music_tui` 导入包及本机账号与配置目录。
+- 更新安装、版本读取及打包验证；GitHub Release 产物通过 Trusted Publishing 自动发布到 PyPI。
+
 ## v0.4.2
 
 - 重写 README，补充 PyPI 安装与升级，按首次登录、网易云配置、日常操作、快捷键和常见问题组织说明。

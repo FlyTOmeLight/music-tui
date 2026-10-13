@@ -130,7 +130,7 @@ def prepare(target: Path) -> dict:
     defaults.update(
         appId=config.get("appId", ""),
         privateKeyFile=config.get("privateKeyFile", ""),
-        appVer=version("music-tui"),
+        appVer=version("melody-tui"),
         osVer=platform.mac_ver()[0] if sys.platform == "darwin" else platform.release(),
         model=_model() or previous.get("model", ""),
         clientIp=address or previous.get("clientIp", ""),

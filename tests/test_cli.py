@@ -23,7 +23,7 @@ def test_main_reports_installed_version_without_starting_app(monkeypatch, capsys
         app.main()
     assert error.value.code == 0
     output = capsys.readouterr()
-    assert output.out == f"music-tui {version('music-tui')}\n"
+    assert output.out == f"music-tui {version('melody-tui')}\n"
     assert output.err == ""
 
 

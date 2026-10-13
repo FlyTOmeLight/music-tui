@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/music-tui/
+      url: https://pypi.org/project/melody-tui/
     permissions:
       contents: read
       id-token: write
@@ -34,6 +34,6 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           gh release download "$RELEASE_TAG" --dir dist \
-            --pattern 'music_tui-*.whl' --pattern 'music_tui-*.tar.gz'
+            --pattern 'melody_tui-*.whl' --pattern 'melody_tui-*.tar.gz'
       - name: Publish to PyPI with Trusted Publishing
         run: uv publish --trusted-publishing always dist/*

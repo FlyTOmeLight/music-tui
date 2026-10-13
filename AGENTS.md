@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Music TUI uses distribution name `music-tui` and import package `music_tui`. QQ Music and NetEase Cloud Music are supported.
+Music TUI uses distribution name `melody-tui`, command `music-tui`, and import package `music_tui`. QQ Music and NetEase Cloud Music are supported.
 
 Source lives in `src/music_tui/`: `app.py` owns the Textual interface and playback queue, `screens.py` contains feature dialogs, `playback_screen.py` shows the independent player page, `history_screen.py` displays recent songs and sources, `session.py` saves preferences and account-scoped sessions and history, `models.py` defines shared values, `sources/qqmusic.py` and `sources/netease.py` own platform access and credentials, and `player.py` controls mpv through a Unix socket. Tests live in `tests/`, grouped by behavior. `docs/tui-preview.png` shows the interface. `pyproject.toml` declares dependencies; `uv.lock` pins versions. Consult `docs/python-project-structure.md` when changing module boundaries.
 

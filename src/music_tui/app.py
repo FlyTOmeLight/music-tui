@@ -2377,7 +2377,7 @@ def main() -> None:
         "-v",
         "--version",
         action="version",
-        version=f"music-tui {version('music-tui')}",
+        version=f"music-tui {version('melody-tui')}",
         help="Show the installed version and exit",
     )
     parser.add_argument(

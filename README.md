@@ -10,13 +10,15 @@ Music TUI 支持跨页播放、手动待播、同步歌词、音质选择和播�
 
 ## 安装
 
+PyPI 包名为 `melody-tui`，安装后的启动命令为 `music-tui`。
+
 需要 **Python 3.13+**、[uv](https://docs.astral.sh/uv/) 和 [mpv](https://mpv.io/)。音频由本机 mpv 进程播放。
 
 macOS：
 
 ```sh
 brew install uv mpv
-uv tool install --python 3.13 music-tui
+uv tool install --python 3.13 melody-tui
 music-tui
 ```
 
@@ -26,7 +28,7 @@ Linux 请先用系统包管理器安装 mpv，并安装 uv，再执行上面的 
 升级和查看版本：
 
 ```sh
-uv tool upgrade music-tui
+uv tool upgrade melody-tui
 music-tui --version
 ```
 
