@@ -563,7 +563,7 @@ class MusicApp(App):
         if self.appearance != "system":
             return
         theme = await detect_system_theme()
-        if self.appearance != "system":
+        if not self.is_running or self.appearance != "system":
             return
         if theme is None:
             self._system_theme_unavailable = True
@@ -1462,16 +1462,17 @@ class MusicApp(App):
             await self.player.command("stop")
         self.playback_track = track
         tiers = list(Quality)
+        unavailable_reason = ""
         for actual_quality in tiers[tiers.index(quality) :]:
             self.status(f"正在获取：{track.title} · {actual_quality.label}")
             try:
                 url = await self.music.stream_url(track, actual_quality)
                 break
-            except QualityUnavailableError:
-                continue
+            except QualityUnavailableError as error:
+                unavailable_reason = error_text(error)
         else:
             raise QualityUnavailableError(
-                "此歌曲暂无可用完整音源，已尝试至标准音质，请检查音源和会员权限"
+                f"《{track.title}》播放失败：{unavailable_reason} · 已尝试至标准音质"
             )
         await self.player.load(
             url,
@@ -1581,6 +1582,9 @@ class MusicApp(App):
             detail.append(bar[:filled], style=self.get_css_variables()["accent"])
             detail.append(bar[filled:], style=self.get_css_variables()["text-muted"])
             detail.append(f" {timestamp(duration)}   音量 {volume}%")
+        elif self.playback_track is not None:
+            title = f"{self.playback_track.title} — {self.playback_track.artist}"
+            detail = Text("正在获取音源…" if self.loading else "等待重试 · F5 重试 · N 下一首")
         else:
             title = "正在加载…" if self.loading else "尚未播放"
             detail = Text("选中歌曲后按 Enter 播放")

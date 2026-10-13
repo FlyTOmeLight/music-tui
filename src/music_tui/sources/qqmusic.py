@@ -343,7 +343,7 @@ class QQMusic:
             if not urls.data or not urls.data[0].purl or urls.data[0].result != 0:
                 code = urls.data[0].result if urls.data else "空响应"
                 raise QualityUnavailableError(
-                    f"此歌曲的{quality.label}不可用（{code}），请检查音源和会员权限"
+                    f"QQ 结果码 {code}：未提供可用的{quality.label}播放地址"
                 )
             cdn = await self.client.song.get_cdn_dispatch()
             if not cdn.sip:

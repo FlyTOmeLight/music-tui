@@ -66,14 +66,16 @@ async def test_available_quality_uses_authorized_paths_and_correct_variant(monke
 
 
 @pytest.mark.parametrize(
-    "data",
+    "data, code",
     [
-        [],
-        [SimpleNamespace(purl="", result=0)],
-        [SimpleNamespace(purl="denied.flac", result=104003)],
+        ([], "空响应"),
+        ([SimpleNamespace(purl="", result=0)], "0"),
+        ([SimpleNamespace(purl="denied.flac", result=104003)], "104003"),
     ],
 )
-async def test_qq_unavailable_or_denied_streams_allow_lower_tiers(monkeypatch, tmp_path, data):
+async def test_qq_unavailable_or_denied_streams_allow_lower_tiers(
+    monkeypatch, tmp_path, data, code
+):
     """Expose a typed restriction when QQ withholds audio or rejects its authorization."""
 
     async def get_song_urls(infos, **options):
@@ -85,8 +87,10 @@ async def test_qq_unavailable_or_denied_streams_allow_lower_tiers(monkeypatch, t
         lambda **kwargs: SimpleNamespace(song=SimpleNamespace(get_song_urls=get_song_urls)),
     )
     music = QQMusic(tmp_path)
-    with pytest.raises(QualityUnavailableError):
+    with pytest.raises(QualityUnavailableError) as failure:
         await music.stream_url(Track("song", "歌曲", "歌手", 120), Quality.LOSSLESS)
+    assert f"QQ 结果码 {code}" in str(failure.value)
+    assert "会员" not in str(failure.value)
 
 
 async def test_qq_missing_premium_variant_allows_lower_tiers(monkeypatch, tmp_path):

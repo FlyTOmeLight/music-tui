@@ -1,5 +1,7 @@
 """Verify automatic per-song quality selection without changing the saved preference."""
 
+import asyncio
+
 import pytest
 from test_app import FIRST, SECOND
 from test_playback_features import FeatureAudio, FeatureLibrary
@@ -126,6 +128,70 @@ async def test_all_unavailable_tiers_stop_at_standard_with_a_clear_error():
         assert not player.loaded and app.current is None and app.current_quality is None
         assert "已尝试至标准音质" in str(app.query_one("#status", Static).render())
         assert "F5 重试" in app.last_status_message
+
+
+async def test_exhausted_tiers_preserve_song_and_standard_tier_reason():
+    """Explain the final source failure without replacing it with a membership guess."""
+
+    class UnavailableLibrary(TierLibrary):
+        async def stream_url(self, track, quality):
+            """Return distinct high-tier and standard-tier unavailability reasons."""
+            self.requests.append((track, quality))
+            reason = "接口未返回播放地址" if quality == Quality.STANDARD else "该档音质无可用文件"
+            raise QualityUnavailableError(reason)
+
+    app = MusicApp(UnavailableLibrary({}), FeatureAudio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        app.queue = [FIRST]
+        app.quality = Quality.MASTER
+        await app.play_index(0).wait()
+        assert FIRST.title in app.last_status_message
+        assert "标准音质" in app.last_status_message
+        assert "接口未返回播放地址" in app.last_status_message
+        assert "会员" not in app.last_status_message
+        assert "F5 重试" in app.last_status_message and "N 下一首" in app.last_status_message
+
+
+@pytest.mark.parametrize("manual", [False, True])
+async def test_loading_and_failed_song_identity_stays_visible_until_explicit_retry(manual):
+    """Keep the requested song visible during resolution and failure without skipping it."""
+    started, release = asyncio.Event(), asyncio.Event()
+
+    class DelayedLibrary(TierLibrary):
+        async def stream_url(self, track, quality):
+            """Hold resolution until the test can observe the loading song summary."""
+            started.set()
+            await release.wait()
+            return await super().stream_url(track, quality)
+
+    music, player = DelayedLibrary({}), FeatureAudio()
+    app = MusicApp(music, player)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        app.quality = Quality.MASTER
+        app.queue = [FIRST, SECOND]
+        worker = app.play_manual(QueuedTrack(FIRST, "original", 1)) if manual else app.play_index(0)
+        await asyncio.wait_for(started.wait(), 1)
+        app.update_player()
+        title = str(app.query_one("#now-playing", Static).render())
+        detail = str(app.query_one("#playback-detail", Static).render())
+        assert FIRST.title in title and FIRST.artist in title
+        assert "正在获取" in detail and "Enter" not in detail
+        release.set()
+        await worker.wait()
+        app.update_player()
+        title = str(app.query_one("#now-playing", Static).render())
+        detail = str(app.query_one("#playback-detail", Static).render())
+        assert FIRST.title in title and FIRST.artist in title
+        assert "F5 重试" in detail and "N 下一首" in detail
+        assert "尚未播放" not in title and "Enter" not in detail
+        assert app.playback_track == FIRST and app.current is None
+        assert all(track == FIRST for track, _ in music.requests)
+        music.allowed[FIRST] = [Quality.STANDARD]
+        await app.action_retry().wait()
+        assert app.current == FIRST and player.loaded == ["a/STANDARD"]
+        assert app.quality == Quality.MASTER
 
 
 @pytest.mark.parametrize(
