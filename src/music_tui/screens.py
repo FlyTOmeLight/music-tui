@@ -62,7 +62,8 @@ class HelpScreen(ModalScreen[None]):
                     "Space  暂停／继续    P / N  上一首／下一首\n"
                     "← / →  后退／前进 5 秒    − / +  调整音量\n"
                     "R  切换播放模式    U  选择音质\n"
-                    "[ / ] 或 PageUp / PageDown  翻页\n"
+                    "[  上一页    ]  下一页（英文方括号）\n"
+                    "歌曲列表中 PageUp  上一页 / PageDown  下一页\n"
                     "/  搜索歌曲与歌手    F  歌单内筛选\n"
                     "Tab  切换焦点    Esc  返回歌曲列表\n\n"
                     "队列与会话\n"
@@ -79,7 +80,7 @@ class HelpScreen(ModalScreen[None]):
                     "Ctrl+N  新建歌单    歌单侧栏可按累计播放量排序\n"
                     "Ctrl+R  刷新当前列表    L  扫码登录\n"
                     "F2  切换音乐平台    F9  昼夜模式    Q  退出\n\n"
-                    "搜索框中可正常输入字母；先按 Esc 返回列表，再使用字母快捷键。",
+                    "搜索框中可正常输入字母和方括号；先按 Esc 返回列表，再使用快捷键。",
                     markup=False,
                 )
             yield Static("↑/↓ 或 PageUp/PageDown 滚动 · F1/Esc 返回", classes="dialog-keys")
