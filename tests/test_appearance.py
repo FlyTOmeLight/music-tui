@@ -3,14 +3,41 @@
 import asyncio
 
 import pytest
-from test_app import FIRST
+from test_app import FIRST, Library
 from test_playback_features import FeatureAudio, FeatureLibrary
 from textual.color import Color
 from textual.widgets import DataTable, Input, Static
 
 from music_tui.app import MusicApp
+from music_tui.models import Track
 from music_tui.playback_screen import PlaybackScreen
 from music_tui.session import SessionStore
+
+
+async def test_delayed_system_appearance_failure_preserves_playback_error(monkeypatch):
+    """Report unreadable system appearance in the heading without hiding a newer playback error."""
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def detect():
+        """Return an unavailable desktop appearance after playback has already failed."""
+        started.set()
+        await release.wait()
+        return None
+
+    monkeypatch.setattr("music_tui.app.detect_system_theme", detect)
+    app = MusicApp(Library(), FeatureAudio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        async with asyncio.timeout(2):
+            await started.wait()
+        app.queue = [Track("denied", "会员歌曲", "歌手", 200), FIRST]
+        await app.play_index(0).wait()
+        assert "暂无播放权限" in app.last_status_message
+        release.set()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert "暂无播放权限" in str(app.query_one("#status", Static).render())
+        assert "系统外观不可用" in str(app.query_one("#heading", Static).render())
+        assert app.current is None and app.player.loaded == []
 
 
 @pytest.mark.parametrize("theme", ["music-day", "music-night"])

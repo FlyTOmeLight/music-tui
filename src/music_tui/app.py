@@ -556,8 +556,6 @@ class MusicApp(App):
         if self.appearance != "system":
             return
         if theme is None:
-            if not self._system_theme_unavailable:
-                self.status("无法读取系统外观 · F9 手动切换 · Shift+F9 重试跟随系统")
             self._system_theme_unavailable = True
             self.update_heading()
             return
