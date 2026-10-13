@@ -1,10 +1,11 @@
-"""Verify recent playback and source navigation in compact keyboard-driven dialogs."""
+"""Verify recent playback and source navigation in compact full-screen pages."""
 
 from dataclasses import asdict
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Input, Label, ListView, Static
+from textual.screen import ModalScreen
+from textual.widgets import Input, Label, ListView, Static, Tabs
 
 from music_tui.history_screen import HistoryEntry, HistoryScreen
 from music_tui.models import Track
@@ -17,7 +18,7 @@ class HistoryHarness(App):
     """Host recent playback above a focusable widget without any music resources."""
 
     def compose(self) -> ComposeResult:
-        """Provide the original focus target for dialog dismissal."""
+        """Provide the original focus target when the recent page closes."""
         yield Input(id="original-focus")
 
 
@@ -136,3 +137,29 @@ async def test_recent_sources_deduplicate_playlist_id_and_search_query():
         await pilot.press("down", "enter")
         await pilot.pause()
         assert results == [("open", search.record)]
+
+
+@pytest.mark.parametrize("size", [(80, 24), (48, 16)])
+async def test_history_visible_tabs_navigate_and_switch_content(size):
+    """Expose full-screen navigation and switch source content through a visible tab."""
+    app = HistoryHarness()
+    navigations = []
+    async with app.run_test(size=size) as pilot:
+        page = HistoryScreen([entry(), entry(SECOND)], navigations.append)
+        app.push_screen(page)
+        await pilot.pause()
+        assert not isinstance(page, ModalScreen)
+        navigation = page.query_one("#navigation", Tabs)
+        assert navigation.active == "history"
+        assert page.region.width == size[0] and page.region.height == size[1]
+        assert navigations == []
+        await pilot.click("#recent-sources")
+        await pilot.pause()
+        assert page.source_mode
+        assert len(page.query_one(ListView).children) == 1
+        await pilot.click("#playback")
+        await pilot.pause()
+        assert navigations == ["playback"]
+        await pilot.click("#browse")
+        await pilot.pause()
+        assert navigations == ["playback", "browse"]

@@ -1,4 +1,4 @@
-"""Keyboard-driven dialogs for queue, lyrics, library actions, and shortcut help."""
+"""Inline listening panels and dialogs for library actions and shortcut help."""
 
 from bisect import bisect_right
 from collections.abc import Callable
@@ -8,30 +8,38 @@ from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Label, ListItem, ListView, Static
+from textual.widgets import Button, DataTable, Input, Label, ListItem, ListView, Static
 
 from .models import Lyrics, Playlist, Track
 
 DIALOG_CSS = """
-.feature-dialog { align: center middle; background: #111821 95%; }
+.feature-dialog { align: center middle; background: $background 95%; }
 .feature-dialog .dialog-box {
     width: 74; max-width: 100%; height: 90%; max-height: 100%;
-    border: solid #58d6a0; padding: 0 1; background: #111821; color: #e4ecf5;
+    border: round $border; padding: 0 1; background: $background; color: $foreground;
 }
-.feature-dialog .dialog-title { height: auto; color: #65d9a4; text-style: bold; }
-.feature-dialog .dialog-subtitle { height: auto; color: #a1b2c8; }
+.feature-dialog .dialog-title {
+    background: $surface;
+    padding: 0 1;
+    height: auto;
+    color: $accent;
+    text-style: bold;
+}
+.feature-dialog .dialog-subtitle { height: auto; color: $text-muted; }
 .feature-dialog .dialog-body { height: 1fr; margin: 1 0; }
-.feature-dialog .dialog-keys { height: auto; color: #a1b2c8; }
+.feature-dialog .dialog-keys { border-top: solid $border; height: auto; color: $text-muted; }
 .feature-dialog ListItem { height: auto; min-height: 2; margin: 0; padding: 0 1; }
 .feature-dialog ListItem > Label { height: auto; }
 .feature-dialog ListView { background: transparent; }
-.feature-dialog ListView:focus > ListItem.-highlight { background: #254a41; }
+.feature-dialog ListView > ListItem.-highlight { background: $surface; }
+.feature-dialog ListView:focus > ListItem.-highlight { background: $primary-muted; color: $accent; }
 .feature-dialog DataTable { background: transparent; }
-.feature-dialog DataTable:focus > .datatable--cursor { background: #254a41; color: white; }
-.feature-dialog .lyric-line { height: auto; padding: 0 1; margin-bottom: 1; }
-.feature-dialog .lyric-current { background: #254a41; color: #65d9a4; text-style: bold; }
+.feature-dialog DataTable > .datatable--header { background: $surface; color: $text-muted; }
+.feature-dialog DataTable:focus > .datatable--cursor {
+    background: $primary-muted; color: $foreground;
+}
 """
 
 
@@ -58,7 +66,7 @@ class HelpScreen(ModalScreen[None]):
                     "/  搜索歌曲与歌手    F  歌单内筛选\n"
                     "Tab  切换焦点    Esc  返回歌曲列表\n\n"
                     "队列与会话\n"
-                    "F3  查看待播队列    A  将选中歌曲插入下一首\n"
+                    "F3  打开播放页的队列页签    A  将选中歌曲插入下一首\n"
                     "队列内 Delete  删除选中的手动待播歌曲\n"
                     "Ctrl+↑/↓  调整待播顺序    Ctrl+Delete  清空手动待播\n"
                     "F5  重试当前失败歌曲    F6  继续上次播放\n"
@@ -66,10 +74,11 @@ class HelpScreen(ModalScreen[None]):
                     "F8  最近播放；Tab 切换歌曲／来源，O 打开来源\n"
                     "G  返回当前播放来源并定位歌曲\n\n"
                     "歌词与歌单\n"
-                    "F4  查看当前歌曲的歌词\n"
-                    "S  喜欢／取消喜欢    W  加入已有歌单\n"
+                    "F4  打开播放页的歌词页签\n"
+                    "S  喜欢／取消喜欢    W  加入歌单（播放页为当前歌曲）\n"
+                    "Ctrl+N  新建歌单    歌单侧栏可按累计播放量排序\n"
                     "Ctrl+R  刷新当前列表    L  扫码登录\n"
-                    "F2  切换音乐平台    Q  退出\n\n"
+                    "F2  切换音乐平台    F9  昼夜模式    Q  退出\n\n"
                     "搜索框中可正常输入字母；先按 Esc 返回列表，再使用字母快捷键。",
                     markup=False,
                 )
@@ -103,21 +112,22 @@ class QueueState:
     source_label: str
 
 
-class QueueScreen(ModalScreen[None]):
-    """Edit manual next tracks while following changes to live playback."""
+class QueuePanel(Vertical):
+    """Edit the live queue inside the playback page."""
 
     BINDINGS = [
-        Binding("escape,f3", "cancel", "返回", priority=True),
-        Binding("space", "app.pause", "暂停", priority=True),
-        Binding("n", "app.next", "下一首", priority=True),
-        Binding("p", "app.previous", "上一首", priority=True),
         Binding("delete,backspace", "edit('remove')", "删除待播"),
         Binding("ctrl+up", "edit('up')", "上移", priority=True),
         Binding("ctrl+down", "edit('down')", "下移", priority=True),
         Binding("ctrl+delete", "edit('clear')", "清空待播", priority=True),
     ]
-    SCOPED_CSS = False
-    DEFAULT_CSS = DIALOG_CSS
+    DEFAULT_CSS = """
+    QueuePanel { height: 1fr; background: $surface; }
+    QueuePanel .queue-summary { height: 1; color: $text-muted; text-overflow: ellipsis; }
+    QueuePanel #queue-items { height: 1fr; background: $surface; }
+    QueuePanel #queue-notice { height: auto; color: $text-muted; }
+    QueuePanel .queue-keys { height: 1; color: $text-muted; text-overflow: ellipsis; }
+    """
 
     def __init__(
         self,
@@ -132,25 +142,21 @@ class QueueScreen(ModalScreen[None]):
         self._row_keys: list[object | None] = []
 
     def compose(self) -> ComposeResult:
-        """Keep editing instructions visible while the live queue table scrolls."""
-        self.add_class("feature-dialog")
-        with Vertical(classes="dialog-box"):
-            yield Static("待播队列", classes="dialog-title")
-            yield Static("", id="queue-current", markup=False, classes="dialog-subtitle")
-            yield Static("", id="queue-source", markup=False, classes="dialog-subtitle")
-            yield DataTable(id="queue-items", classes="dialog-body", cursor_type="row")
-            yield Static("", id="queue-notice", markup=False, classes="dialog-subtitle")
-            yield Static(
-                "↑/↓ 选择 · Delete 删除 · Ctrl+↑/↓ 调序\n" "Ctrl+Delete 清空手动待播 · F3/Esc 返回",
-                classes="dialog-keys",
-            )
+        """Keep queue rows and editing guidance within the playback tab."""
+        yield Static("", id="queue-current", markup=False, classes="queue-summary")
+        yield Static("", id="queue-source", markup=False, classes="queue-summary")
+        yield DataTable(id="queue-items", cursor_type="row")
+        yield Static("", id="queue-notice", markup=False)
+        yield Static(
+            "Delete 删除 · Ctrl+↑/↓ 调序 · Ctrl+Delete 清空",
+            classes="queue-keys",
+        )
 
     def on_mount(self) -> None:
         """Start refreshing live rows without recreating the focused table."""
         table = self.query_one("#queue-items", DataTable)
         table.add_columns("顺序", "歌曲", "歌手")
         self.refresh_queue()
-        table.focus()
         self.set_interval(0.25, self.refresh_queue)
 
     def selected_key(self) -> object | None:
@@ -181,7 +187,7 @@ class QueueScreen(ModalScreen[None]):
         )
         self.query_one("#queue-current", Static).update(current)
         self.query_one("#queue-source", Static).update(
-            f"播放来源：{state.source_label or '尚未选择'}\n" "手动待播优先播放，听完后继续原列表。"
+            f"播放来源：{state.source_label or '尚未选择'} · 手动待播优先"
         )
         table.clear()
         self._row_keys = []
@@ -204,63 +210,78 @@ class QueueScreen(ModalScreen[None]):
         self.query_one("#queue-notice", Static).display = bool(notice)
 
     def action_edit(self, operation: str) -> None:
-        """Edit the displayed manual identity and leave the queue dialog open."""
+        """Edit the rendered manual identity and retain the queue tab."""
         key = self.selected_key()
         if operation == "clear" or key is not None:
             self.edit(operation, None if operation == "clear" else key)
             self.refresh_queue()
 
-    def action_cancel(self) -> None:
-        """Close the queue while keeping edits and ongoing playback intact."""
-        self.dismiss(None)
 
-
-class LyricsScreen(ModalScreen[None]):
-    """Follow the active lyric line while keeping plain lyrics readable."""
+class LyricsPanel(Vertical):
+    """Follow live lyrics inside a playback tab while keeping plain text readable."""
 
     BINDINGS = [
-        Binding("escape,f4", "cancel", "返回", priority=True),
         Binding("left", "app.seek(-5)", "后退", show=False),
         Binding("right", "app.seek(5)", "前进", show=False),
     ]
-    SCOPED_CSS = False
-    DEFAULT_CSS = DIALOG_CSS
+    DEFAULT_CSS = """
+    LyricsPanel { height: 1fr; background: $surface; }
+    LyricsPanel #lyrics-title { height: 1; color: $text-muted; text-overflow: ellipsis; }
+    LyricsPanel #lyrics-body { height: 1fr; }
+    LyricsPanel .lyric-line { height: auto; padding: 0 1; margin-bottom: 1; }
+    LyricsPanel .lyric-current { background: $primary-muted; color: $accent; text-style: bold; }
+    """
 
-    def __init__(self, track: Track, lyrics: Lyrics, position: Callable[[], float]):
-        """Bind lyrics to the current track and its live playback position."""
+    def __init__(self, position: Callable[[], float]):
+        """Read playback time without retaining ownership of the player."""
         super().__init__()
-        self.track = track
-        self.lyrics = lyrics
         self.position = position
+        self.lyrics = Lyrics()
         self.active_line = -1
-        self._times = [line.seconds for line in lyrics.lines]
+        self._times: list[float] = []
 
     def compose(self) -> ComposeResult:
-        """Render literal lyrics and translations with explicit unavailable states."""
-        self.add_class("feature-dialog")
-        with Vertical(classes="dialog-box"):
-            yield Static(f"歌词 · {self.track.title}", markup=False, classes="dialog-title")
-            yield Static(self.track.artist, markup=False, classes="dialog-subtitle")
-            with VerticalScroll(id="lyrics-body", classes="dialog-body"):
-                if not self.lyrics.lines:
-                    yield Static("暂无歌词，此歌曲可能是纯音乐。", markup=False)
-                elif not self.lyrics.synced:
-                    yield Static("歌词没有时间信息，可手动滚动阅读。", markup=False)
-                for index, line in enumerate(self.lyrics.lines):
-                    text = line.text + (f"\n{line.translation}" if line.translation else "")
-                    yield Static(text, markup=False, id=f"lyric-{index}", classes="lyric-line")
-            hint = "←/→ 后退/前进 5 秒 · " if self.lyrics.synced and self.lyrics.lines else ""
-            yield Static(f"{hint}↑/↓ 滚动 · F4/Esc 返回", classes="dialog-keys")
+        """Reserve a scrollable lyric body for loading, failure, and lyric content."""
+        yield Static("歌词", id="lyrics-title", markup=False)
+        with VerticalScroll(id="lyrics-body"):
+            yield Static("播放歌曲后可查看歌词。", markup=False)
 
     def on_mount(self) -> None:
-        """Start position tracking after the lyric widgets are laid out."""
-        self.query_one("#lyrics-body", VerticalScroll).focus()
-        self.call_after_refresh(self.sync_position)
+        """Track lyric time while leaving initial focus to the playback page."""
         self.set_interval(0.25, self.sync_position)
 
+    async def show_message(self, text: str) -> None:
+        """Clear old song lyrics and show the current loading or unavailable state."""
+        self.lyrics = Lyrics()
+        self.active_line = -1
+        self._times = []
+        body = self.query_one("#lyrics-body", VerticalScroll)
+        await body.remove_children()
+        await body.mount(Static(text, markup=False))
+        body.scroll_home(animate=False)
+
+    async def show_lyrics(self, track: Track, lyrics: Lyrics) -> None:
+        """Replace the previous song and render literal lyrics and translations."""
+        await self.show_message("")
+        self.query_one("#lyrics-title", Static).update(f"{track.title} · {track.artist}")
+        body = self.query_one("#lyrics-body", VerticalScroll)
+        await body.remove_children()
+        widgets = []
+        if not lyrics.lines:
+            widgets.append(Static("暂无歌词，此歌曲可能是纯音乐。", markup=False))
+        elif not lyrics.synced:
+            widgets.append(Static("歌词没有时间信息，可手动滚动阅读。", markup=False))
+        for index, line in enumerate(lyrics.lines):
+            text = line.text + (f"\n{line.translation}" if line.translation else "")
+            widgets.append(Static(text, markup=False, id=f"lyric-{index}", classes="lyric-line"))
+        await body.mount(*widgets)
+        self.lyrics = lyrics
+        self._times = [line.seconds for line in lyrics.lines]
+        self.call_after_refresh(self.sync_position)
+
     def sync_position(self) -> None:
-        """Update the active line after playback, pause, or forward/backward seeking."""
-        if not self.lyrics.synced or not self._times:
+        """Highlight and center the current line after playback or seeking."""
+        if not self.is_on_screen or not self.lyrics.synced or not self._times:
             return
         index = bisect_right(self._times, self.position()) - 1
         if index == self.active_line:
@@ -275,28 +296,27 @@ class LyricsScreen(ModalScreen[None]):
                 line, animate=False, center=True
             )
 
-    def action_cancel(self) -> None:
-        """Close lyrics and restore browsing focus without changing playback."""
-        self.dismiss(None)
 
-
-class PlaylistPickerScreen(ModalScreen[Playlist | None]):
+class PlaylistPickerScreen(ModalScreen[Playlist | str | None]):
     """Choose a source-reported writable playlist for the selected song."""
 
     BINDINGS = [Binding("escape", "cancel", "返回", priority=True)]
     SCOPED_CSS = False
     DEFAULT_CSS = DIALOG_CSS
 
-    def __init__(self, playlists: list[Playlist]):
+    def __init__(self, playlists: list[Playlist], *, allow_create: bool = False):
         """Exclude collected and other playlists which the account cannot edit."""
         super().__init__()
         self.playlists = [playlist for playlist in playlists if playlist.editable]
+        self.allow_create = allow_create
 
     def compose(self) -> ComposeResult:
         """Show writable playlists or a clear account/library empty state."""
         self.add_class("feature-dialog")
         with Vertical(classes="dialog-box"):
             yield Static("加入歌单", classes="dialog-title")
+            if self.allow_create:
+                yield Button("新建歌单并加入", id="picker-create")
             if self.playlists:
                 yield ListView(
                     *(ListItem(Label(playlist.title, markup=False)) for playlist in self.playlists),
@@ -324,4 +344,64 @@ class PlaylistPickerScreen(ModalScreen[Playlist | None]):
 
     def action_cancel(self) -> None:
         """Close the picker without adding the song anywhere."""
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#picker-create")
+    def create_destination(self) -> None:
+        """Return an explicit creation choice instead of inventing a destination ID."""
+        self.dismiss("create")
+
+
+class CreatePlaylistScreen(ModalScreen[str | None]):
+    """Collect a playlist name before submitting an account write."""
+
+    BINDINGS = [Binding("escape", "cancel", "返回", priority=True)]
+    DEFAULT_CSS = """
+    CreatePlaylistScreen { align: center middle; background: $background 95%; }
+    CreatePlaylistScreen #create-box {
+        width: 50; max-width: 100%; height: auto;
+        background: $surface; border: round $border; padding: 0 2;
+    }
+    CreatePlaylistScreen #create-title { height: 1; color: $accent; text-style: bold; }
+    CreatePlaylistScreen #create-name { height: 3; }
+    CreatePlaylistScreen #create-error { height: 1; color: $error; }
+    CreatePlaylistScreen #create-buttons { height: 3; }
+    CreatePlaylistScreen #create-buttons Button { width: 1fr; min-width: 0; }
+    CreatePlaylistScreen #create-keys { height: 1; color: $text-muted; }
+    """
+
+    def compose(self) -> ComposeResult:
+        """Keep the name, inline validation, and submission controls in one compact form."""
+        with Vertical(id="create-box"):
+            yield Static("新建歌单", id="create-title")
+            yield Input(placeholder="歌单名称", id="create-name")
+            yield Static("", id="create-error", markup=False)
+            with Horizontal(id="create-buttons"):
+                yield Button("创建", id="create-confirm", disabled=True)
+                yield Button("取消", id="create-cancel")
+            yield Static("Enter 创建 · Esc 返回", id="create-keys")
+
+    def on_mount(self) -> None:
+        """Focus the name field before the user enters a playlist title."""
+        self.query_one("#create-name", Input).focus()
+
+    @on(Input.Changed, "#create-name")
+    def validate_name(self, event: Input.Changed) -> None:
+        """Enable submission only for a name containing non-whitespace text."""
+        self.query_one("#create-confirm", Button).disabled = not event.value.strip()
+        self.query_one("#create-error", Static).update("")
+
+    @on(Input.Submitted, "#create-name")
+    @on(Button.Pressed, "#create-confirm")
+    def confirm_name(self) -> None:
+        """Return the trimmed name or show a local validation error without creating anything."""
+        title = self.query_one("#create-name", Input).value.strip()
+        if title:
+            self.dismiss(title)
+        else:
+            self.query_one("#create-error", Static).update("请输入歌单名称")
+
+    @on(Button.Pressed, "#create-cancel")
+    def action_cancel(self) -> None:
+        """Leave the form without creating a playlist or adding a song."""
         self.dismiss(None)

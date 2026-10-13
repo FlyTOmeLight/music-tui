@@ -4,11 +4,12 @@ import asyncio
 
 import pytest
 from test_app import FIRST, SECOND, THIRD, Audio, Library
-from textual.widgets import DataTable, Input, ListView, Static
+from textual.widgets import DataTable, Input, ListView, Static, TabbedContent
 
 from music_tui.app import MusicApp, RepeatMode
 from music_tui.models import LyricLine, Lyrics, Playlist
-from music_tui.screens import HelpScreen, LyricsScreen, PlaylistPickerScreen, QueueScreen
+from music_tui.playback_screen import PlaybackScreen
+from music_tui.screens import HelpScreen, LyricsPanel, PlaylistPickerScreen
 
 
 class FeatureAudio(Audio):
@@ -146,10 +147,11 @@ async def test_queue_delete_and_locate_preserve_audio_and_original_source():
         await pilot.pause()
         await app.load_view(Playlist(3, "其他歌单")).wait()
         await pilot.press("a", "a", "f3")
-        assert isinstance(app.screen, QueueScreen)
+        assert isinstance(app.screen, PlaybackScreen)
+        assert app.screen.query_one("#playback-tabs", TabbedContent).active == "queue"
         await pilot.press("delete")
         await pilot.pause()
-        assert len(app.pending_tracks) == 1 and isinstance(app.screen, QueueScreen)
+        assert len(app.pending_tracks) == 1 and isinstance(app.screen, PlaybackScreen)
         await pilot.press("escape", "g")
         await pilot.pause()
         assert app.source == "original"
@@ -257,19 +259,25 @@ async def test_help_and_new_letter_shortcuts_leave_search_input_usable():
         assert not app.pending_tracks
 
 
-async def test_lyrics_follow_current_song_and_close_on_track_change():
-    """Show live-position lyrics and remove them when another song starts."""
+async def test_lyrics_follow_current_song_in_the_same_playback_page():
+    """Keep lyrics within the player and automatically follow the next song."""
     app = MusicApp(FeatureLibrary(), FeatureAudio())
     async with app.run_test(size=(80, 24)) as pilot:
         await app.load_view("original").wait()
         await pilot.press("enter", "f4")
         await pilot.pause()
-        assert isinstance(app.screen, LyricsScreen)
+        page = app.screen
+        assert isinstance(page, PlaybackScreen)
+        assert page.query_one("#playback-tabs", TabbedContent).active == "lyrics"
+        panel = page.query_one(LyricsPanel)
         app.player.properties["time-pos"] = 6
-        app.screen.sync_position()
-        assert app.screen.active_line == 1
+        panel.sync_position()
+        assert panel.active_line == 1
         await app.play_index(1).wait()
-        assert not isinstance(app.screen, LyricsScreen)
+        page.refresh_playback()
+        await page.workers.wait_for_complete()
+        assert app.screen is page
+        assert SECOND.title in str(panel.query_one("#lyrics-title", Static).render())
         assert app.current == SECOND
 
 
@@ -310,22 +318,28 @@ async def test_stale_lyrics_request_cannot_open_over_a_new_song():
     class SlowLyrics(FeatureLibrary):
         async def lyrics(self, track):
             """Wait for a later song to begin before returning the old lyrics."""
-            started.set()
-            await finish.wait()
-            return await super().lyrics(track)
+            if track == FIRST:
+                started.set()
+                await finish.wait()
+            return Lyrics((LyricLine(0, track.title),))
 
     app = MusicApp(SlowLyrics(), FeatureAudio())
     async with app.run_test() as pilot:
         await app.load_view("original").wait()
         await pilot.press("enter")
         await pilot.pause()
-        worker = app.action_lyrics()
+        app.action_lyrics()
         async with asyncio.timeout(2):
             await started.wait()
+        page = app.screen
         await app.play_index(1).wait()
         finish.set()
-        await worker.wait()
-        assert not isinstance(app.screen, LyricsScreen)
+        page.refresh_playback()
+        panel = page.query_one(LyricsPanel)
+        async with asyncio.timeout(2):
+            while not panel.lyrics.lines or panel.lyrics.lines[0].text != SECOND.title:
+                await pilot.pause()
+        assert SECOND.title in str(panel.query_one("#lyrics-title", Static).render())
         assert app.current == SECOND
 
 
@@ -350,6 +364,7 @@ async def test_replaced_queue_cancels_old_random_queue_preparation():
         app.action_queue()
         async with asyncio.timeout(2):
             await fetching.wait()
+        app.return_to_browse()
         new_source = Playlist(3, "新播放来源")
         await app.load_view(new_source).wait()
         await pilot.press("enter")
@@ -357,4 +372,4 @@ async def test_replaced_queue_cancels_old_random_queue_preparation():
         await pilot.pause()
         assert app.current == THIRD and app.queue_source == new_source
         assert not app.shuffle_pages
-        assert not isinstance(app.screen, QueueScreen)
+        assert not isinstance(app.screen, PlaybackScreen)

@@ -16,25 +16,37 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Static
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    Static,
+    Tab,
+    TabbedContent,
+    Tabs,
+)
 
 from .history_screen import HistoryEntry, HistoryScreen
-from .models import LoginState, Playlist, Quality, SongPage, Track
+from .models import LoginState, Lyrics, Playlist, Quality, QualityUnavailableError, SongPage, Track
 from .netease_config import load_enhanced_config, load_official_config
 from .playback_screen import PlaybackScreen, PlaybackState
 from .player import Player
 from .screens import (
+    CreatePlaylistScreen,
     HelpScreen,
-    LyricsScreen,
     PlaylistPickerScreen,
     QueueItem,
-    QueueScreen,
     QueueState,
 )
 from .session import SessionStore
 from .sources import MusicSource
 from .sources.netease_openapi import OfficialAPIError
 from .sources.qqmusic import QQMusic
+from .themes import DAY, NIGHT, detect_system_theme
 
 
 def timestamp(seconds: float | None) -> str:
@@ -43,10 +55,21 @@ def timestamp(seconds: float | None) -> str:
     return f"{seconds // 60:02}:{seconds % 60:02}"
 
 
+def play_count_text(count: int) -> str:
+    """Display a platform-reported playlist play count in a compact sidebar label."""
+    if count >= 100_000_000:
+        return f"{count / 100_000_000:.1f}亿次"
+    if count >= 10_000:
+        return f"{count / 10_000:.1f}万次"
+    return f"{count}次"
+
+
 def error_text(error: Exception) -> str:
     # Network exceptions may contain authenticated URLs; keep those out of the UI.
     """Return a user-facing error without exposing authenticated network URLs."""
-    if type(error) in (ValueError, RuntimeError) or isinstance(error, OfficialAPIError):
+    if type(error) in (ValueError, RuntimeError) or isinstance(
+        error, (OfficialAPIError, QualityUnavailableError)
+    ):
         return str(error)
     if isinstance(error, TimeoutError):
         return "请求超时，请重试"
@@ -61,7 +84,7 @@ class LoginScreen(ModalScreen[bool]):
     LoginScreen { align: center middle; background: $background 95%; }
     #login-box { width: 58; max-width: 100%; height: auto; max-height: 100%; align: center middle; }
     #login-title, #login-state, #login-keys { width: 100%; height: 1; text-align: center; }
-    #login-title { color: #58d6a0; text-style: bold; }
+    #login-title { color: $accent; text-style: bold; }
     #login-state { height: auto; }
     #qr-frame { width: 100%; height: auto; }
     #qr { width: auto; height: auto; color: black; background: white; }
@@ -137,10 +160,26 @@ class QualityScreen(ModalScreen[Quality | None]):
     BINDINGS = [Binding("escape", "cancel", "返回")]
     DEFAULT_CSS = """
     QualityScreen { align: center middle; background: $background 95%; }
-    #quality-box { width: 44; height: auto; max-height: 100%; border: solid #58d6a0; padding: 1 2; }
+    #quality-box {
+        width: 44;
+        max-width: 100%;
+        background: $surface;
+        color: $foreground;
+        height: auto;
+        max-height: 100%;
+        border: solid $accent;
+        padding: 1 2;
+    }
     #quality-title, #quality-keys { height: 1; }
     #quality-options { height: 14; margin: 1 0; }
+    #quality-title { color: $accent; text-style: bold; }
     #quality-keys { color: $text-muted; }
+    #quality-options { background: transparent; }
+    #quality-options ListItem { height: 2; padding: 0 1; }
+    #quality-options:focus > ListItem.-highlight {
+        background: $block-cursor-background;
+        color: $accent;
+    }
     """
 
     def __init__(self, qualities: list[Quality], selected: Quality):
@@ -190,9 +229,24 @@ class PlatformScreen(ModalScreen[str | None]):
     ]
     DEFAULT_CSS = """
     PlatformScreen { align: center middle; background: $background 95%; }
-    #platform-box { width: 64; max-width: 100%; height: auto; border: solid #58d6a0; padding: 1 2; }
+    #platform-box {
+        background: $surface;
+        color: $foreground;
+        width: 64;
+        max-width: 100%;
+        height: auto;
+        border: solid $accent;
+        padding: 1 2;
+    }
     #platform-options { height: 9; margin: 1 0; }
+    #platform-box > Static:first-child { color: $accent; text-style: bold; }
     #platform-help { height: auto; color: $text-muted; }
+    #platform-options { background: transparent; }
+    #platform-options ListItem { height: 2; margin-bottom: 1; padding: 0 1; }
+    #platform-options:focus > ListItem.-highlight {
+        background: $block-cursor-background;
+        color: $accent;
+    }
     """
 
     def __init__(self, selected: str):
@@ -287,6 +341,19 @@ class RepeatMode(Enum):
     RANDOM = "随机播放"
 
 
+class PlaylistItem(ListItem):
+    """Keep a rendered sidebar row attached to its playlist identity."""
+
+    def __init__(self, playlist: Playlist):
+        """Show literal playlist text and retain its source metadata for selection."""
+        super().__init__(
+            Label(playlist.title, markup=False),
+            Label("", classes="playlist-count", markup=False),
+            Label("", classes="playlist-plays", markup=False),
+        )
+        self.playlist = playlist
+
+
 class SongTable(DataTable):
     BINDINGS = [
         Binding("left", "app.seek(-5)", "后退", show=False),
@@ -299,41 +366,87 @@ class SongTable(DataTable):
 class MusicApp(App):
     TITLE = "Music TUI"
     ENABLE_COMMAND_PALETTE = False
+    SORT_ORDERS = (
+        ("position", False, "原序"),
+        ("title", False, "歌曲↑"),
+        ("title", True, "歌曲↓"),
+        ("artist", False, "歌手↑"),
+        ("artist", True, "歌手↓"),
+        ("duration", False, "时长↑"),
+        ("duration", True, "时长↓"),
+    )
     CSS = """
-    $base: #111821;
-    $surface: #182330;
-    $ink: #e4ecf5;
-    $muted: #a1b2c8;
-    $accent: #65d9a4;
-    $line: #304254;
-    Screen { background: $base; color: $ink; }
-    #heading { height: 1; padding: 0 2; background: $surface; color: $accent; text-style: bold; }
-    #search { margin: 0 1; height: 3; border: tall $line; background: $base; }
+    Screen { background: $background; color: $foreground; }
+    #navigation { height: 1; background: $surface; }
+    #navigation Underline { display: none; }
+    #navigation Tab { padding: 0 2; color: $text-muted; }
+    #navigation Tab.-active { color: $accent; text-style: bold; }
+    #heading {
+        height: 1;
+        text-overflow: ellipsis;
+        padding: 0 2;
+        background: $surface;
+        color: $foreground;
+    }
+    #search { margin: 0 1; height: 3; border: tall $border; background: $background; }
     #search:focus { border: tall $accent; }
+    Input > .input--placeholder { color: $text-muted; }
     #content { height: 1fr; margin: 0 1; }
-    #library { width: 22; border-right: solid $line; padding-right: 1; margin-right: 1; }
-    #library-title { height: 2; color: $muted; padding: 0 1; }
+    #library {
+        width: 25%;
+        min-width: 16;
+        max-width: 28;
+        border-right: solid $border;
+        padding-right: 1;
+        margin-right: 1;
+    }
+    #library-heading { height: 1; }
+    #library-title { height: 1; width: 1fr; color: $accent; text-style: bold; padding: 0 1; }
+    #create-playlist { width: 6; min-width: 6; height: 1; border: none; padding: 0; }
+    #playlist-sort {
+        width: 100%; height: 1; border: none; padding: 0 1; content-align: left middle;
+    }
+    #create-playlist, #playlist-sort { background: $surface; color: $text-muted; }
+    #create-playlist:focus, #playlist-sort:focus { color: $accent; text-style: bold; }
+    #library-hint { height: 2; color: $text-muted; padding: 0 1; }
     #playlists { height: 1fr; background: transparent; }
-    ListItem { padding: 0 1; height: 2; margin-bottom: 1; }
-    ListItem > Label { text-overflow: ellipsis; width: 100%; height: 1; }
-    .playlist-count { color: $muted; }
-    ListView > ListItem.-highlight { background: $surface; }
-    ListView:focus > ListItem.-highlight { background: #254a41; border-left: thick $accent; }
+    #playlists > ListItem { padding: 0 1; height: 3; margin-bottom: 1; }
+    #playlists > ListItem > Label { text-overflow: ellipsis; width: 100%; height: 1; }
+    .playlist-count, .playlist-plays { color: $text-muted; }
+    #playlists > ListItem.-highlight { background: $surface; }
+    #playlists:focus > ListItem.-highlight {
+        background: $block-cursor-background;
+        border-left: thick $accent;
+    }
     #songs-box { width: 1fr; }
-    #view-title { height: 1; color: $ink; text-style: bold; text-overflow: ellipsis; }
-    #view-meta { height: 2; color: $muted; }
-    #filter { height: 3; border: tall $line; background: $base; }
+    #view-title {
+        height: 1;
+        background: $surface;
+        padding: 0 1;
+        color: $foreground;
+        text-style: bold;
+        text-overflow: ellipsis;
+    }
+    #view-toolbar { height: 1; }
+    #view-meta { height: 1; text-overflow: ellipsis; width: 1fr; padding: 0 1; color: $text-muted; }
+    #sort-order { height: 1; width: 18; min-width: 18; border: none; padding: 0 1;
+                  background: $surface; color: $text-muted; }
+    #sort-order:focus { background: $block-cursor-background; color: $accent; text-style: bold; }
+    #filter { height: 3; border: tall $border; background: $background; }
     #filter:focus { border: tall $accent; }
     #songs { height: 1fr; background: transparent; }
-    DataTable > .datatable--header { background: $surface; color: $muted; }
-    DataTable > .datatable--odd-row { background: #141e29; }
-    DataTable > .datatable--cursor { background: $surface; }
-    DataTable:focus > .datatable--cursor { background: #254a41; color: white; }
-    #player-box { height: 3; padding: 0 2; border-top: solid $line; background: $surface; }
-    #now-playing { height: 1; color: $accent; text-style: bold; }
-    #playback-detail { height: 1; color: $muted; }
-    #status { height: 1; padding: 0 1; color: $muted; }
-    Footer { background: $base; }
+    #songs > .datatable--header { background: $surface; color: $text-muted; }
+    #songs > .datatable--even-row { background: $background; }
+    #songs > .datatable--odd-row { background: $music-row; }
+    #songs > .datatable--cursor { background: $surface; }
+    #songs:focus > .datatable--cursor { background: $block-cursor-background; color: $foreground; }
+    #player-box { height: 3; padding: 0 2; border-top: solid $border; background: $surface; }
+    #now-playing { height: 1; text-overflow: ellipsis; color: $accent; text-style: bold; }
+    #playback-detail { height: 1; text-overflow: ellipsis; color: $text-muted; }
+    #status { height: 1; text-overflow: ellipsis; padding: 0 2; color: $text-muted; }
+    Footer { background: $surface; }
+    FooterKey { background: $surface; color: $text-muted; }
+    FooterKey > .footer-key--key { background: $surface; color: $accent; }
     """
     BINDINGS = [
         Binding("f1", "help", "帮助", priority=True),
@@ -344,22 +457,26 @@ class MusicApp(App):
         Binding("f6", "resume_session", "继续上次", priority=True, show=False),
         Binding("f7", "playback", "播放页", priority=True),
         Binding("f8", "history", "最近播放", priority=True),
+        Binding("f9", "appearance", "主题", priority=True),
+        Binding("shift+f9", "system_appearance", "跟随系统", priority=True, show=False),
+        Binding("ctrl+n", "create_playlist", "新建歌单", priority=True, show=False),
         Binding("a", "enqueue", "下一首播放", show=False),
         Binding("s", "like", "喜欢", show=False),
         Binding("w", "add_to_playlist", "加入歌单", show=False),
         Binding("g", "locate", "定位当前", show=False),
         Binding("ctrl+r", "refresh", "刷新", show=False),
-        Binding("p", "previous", "上一首"),
-        Binding("n", "next", "下一首"),
+        Binding("p", "previous", "上一首", show=False),
+        Binding("n", "next", "下一首", show=False),
         Binding("space", "pause", "暂停"),
-        Binding("l", "login", "登录"),
-        Binding("slash", "search", "搜索"),
-        Binding("left_square_bracket", "previous_page", "上一页"),
-        Binding("right_square_bracket", "next_page", "下一页"),
-        Binding("r", "repeat", "模式"),
-        Binding("u", "quality", "音质"),
+        Binding("l", "login", "登录", show=False),
+        Binding("slash", "search", "搜索", show=False),
+        Binding("left_square_bracket", "previous_page", "上一页", show=False),
+        Binding("right_square_bracket", "next_page", "下一页", show=False),
+        Binding("r", "repeat", "模式", show=False),
+        Binding("u", "quality", "音质", show=False),
         Binding("f", "filter", "歌单搜索", show=False),
-        Binding("q", "quit", "退出"),
+        Binding("o", "sort", "本页排序", show=False),
+        Binding("q", "quit", "退出", show=False),
         Binding("left", "seek(-5)", "后退", show=False),
         Binding("right", "seek(5)", "前进", show=False),
         Binding("minus", "volume(-5)", "音量−", show=False),
@@ -378,20 +495,79 @@ class MusicApp(App):
     ):
         """Initialize library, browsing, playback, and shuffle state."""
         super().__init__()
+        self.register_theme(NIGHT)
+        self.register_theme(DAY)
+        self.appearance = session_store.theme() if session_store is not None else "system"
+        self.theme = NIGHT.name if self.appearance == "system" else self.appearance
+        self._system_theme_unavailable = False
         self.music = music
         self.player = player
         self.source_factory = source_factory
         self.source_key = source_key
         self.session_store = session_store
         self.switching = False
+        self.sort_order = 0
+        self.playlist_sort = 0
+        self._playlist_render_lock = asyncio.Lock()
         self.reset_library()
         self.ready = False
         self.table_width = 0
         self.apply_preferences()
 
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        """Provide the row stripe variable used by the registered appearance themes."""
+        return {"music-row": "#141f31"}
+
+    def set_appearance(self, appearance: str) -> None:
+        """Remember the user's system or manual appearance preference globally."""
+        self.appearance = appearance
+        if self.session_store is not None:
+            try:
+                self.session_store.save_theme(appearance)
+            except (OSError, ValueError) as error:
+                self.status(f"无法保存界面主题：{error_text(error)}")
+
+    def apply_theme(self, theme: str) -> None:
+        """Apply a palette and repaint embedded Rich text without changing selection."""
+        if self.theme != theme:
+            self.theme = theme
+            self.draw_tracks()
+            self.now_playing_text = ""
+            self.update_player()
+        self.update_heading()
+
+    def action_appearance(self) -> None:
+        """Select the opposite manual palette while retaining a system-following entry."""
+        theme = DAY.name if self.theme == NIGHT.name else NIGHT.name
+        self.set_appearance(theme)
+        self.apply_theme(theme)
+
+    def action_system_appearance(self) -> None:
+        """Restore automatic appearance immediately and persist it for subsequent launches."""
+        self.set_appearance("system")
+        self.update_system_theme()
+
+    @work(exclusive=True, group="system-appearance")
+    async def update_system_theme(self) -> None:
+        """Follow native appearance changes without overriding a later manual selection."""
+        if self.appearance != "system":
+            return
+        theme = await detect_system_theme()
+        if self.appearance != "system":
+            return
+        if theme is None:
+            if not self._system_theme_unavailable:
+                self.status("无法读取系统外观 · F9 手动切换 · Shift+F9 重试跟随系统")
+            self._system_theme_unavailable = True
+            self.update_heading()
+            return
+        self._system_theme_unavailable = False
+        self.apply_theme(theme)
+
     def reset_library(self) -> None:
         """Clear platform-specific account, browsing, queue and quality state."""
         self.playlists: list[Playlist] = []
+        self.displayed_playlists: list[Playlist] = []
         self.tracks: list[Track] = []
         self.source: str | Playlist | PlaylistSearch | None = None
         self.page = 1
@@ -529,23 +705,36 @@ class MusicApp(App):
             id="heading",
             markup=False,
         )
-        yield Input(placeholder="/ 全站搜索歌曲或歌手，回车搜索", id="search")
+        yield Tabs(
+            Tab("歌曲", id="browse"),
+            Tab("播放", id="playback"),
+            Tab("最近", id="history"),
+            active="browse",
+            id="navigation",
+        )
+        yield Input(placeholder="搜索歌曲或歌手 · / 聚焦 · Enter 搜索", id="search")
         with Horizontal(id="content"):
             with Vertical(id="library"):
-                yield Static("我的歌单", id="library-title")
+                with Horizontal(id="library-heading"):
+                    yield Static("我的歌单", id="library-title")
+                    yield Button("新建", id="create-playlist")
+                yield Button("排序：默认", id="playlist-sort")
                 yield ListView(id="playlists")
+                yield Static("L 账号\nCtrl+R 刷新", id="library-hint", markup=False)
             with Vertical(id="songs-box"):
                 yield Static("选择歌单，或搜索一首歌", id="view-title", markup=False)
-                yield Static("Enter 播放   [ / ] 翻页", id="view-meta", markup=False)
+                with Horizontal(id="view-toolbar"):
+                    yield Static("/ 搜索 · L 登录", id="view-meta", markup=False)
+                    yield Button("O 本页：原序", id="sort-order")
                 field = Input(placeholder="F 歌单内搜索歌名或歌手，回车筛选", id="filter")
                 field.display = False
                 yield field
                 yield SongTable(id="songs", cursor_type="row", zebra_stripes=True)
         with Vertical(id="player-box"):
             yield Static("尚未播放", id="now-playing", markup=False)
-            yield Static("选中歌曲后按 Enter 播放", id="playback-detail", markup=False)
+            yield Static("Enter 播放 · Space 暂停 · P/N 切歌", id="playback-detail", markup=False)
         yield Static("F2 切换平台 · L 扫码登录 · / 搜索 · Tab 切换区域", id="status", markup=False)
-        yield Footer()
+        yield Footer(compact=True)
 
     def on_mount(self) -> None:
         """Initialize song columns, playback polling, and account restoration."""
@@ -556,6 +745,9 @@ class MusicApp(App):
         table.add_column("时长", key="duration", width=5)
         table.focus()
         self.set_interval(0.25, self.update_player)
+        self.set_interval(2, self.update_system_theme)
+        self.update_system_theme()
+        self.sync_playlist_actions()
         self.start_player()
         self.restore_login()
 
@@ -571,6 +763,8 @@ class MusicApp(App):
         if width == self.table_width or width < 20:
             return
         self.table_width = width
+        row = table.cursor_row
+        selected_key = table.ordered_rows[row].key if 0 <= row < table.row_count else None
         table.clear(columns=True)
         available = width - 21
         artist_width = max(8, available // 3)
@@ -580,6 +774,8 @@ class MusicApp(App):
         table.add_column("时长", key="duration", width=5)
         if self.source is not None:
             self.draw_tracks()
+            if selected_key in table.rows:
+                table.move_cursor(row=table.get_row_index(selected_key))
 
     def status(self, message: str) -> None:
         """Replace the status-line message without changing the active view."""
@@ -612,19 +808,18 @@ class MusicApp(App):
             return action == "quit"
         closable = {
             "help": HelpScreen,
-            "queue": QueueScreen,
-            "lyrics": LyricsScreen,
             "history": HistoryScreen,
         }
         if action in closable and isinstance(self.screen, closable[action]):
             return False
-        if isinstance(self.screen, (PlaybackScreen, ModalScreen)) and action in (
+        if isinstance(self.screen, (PlaybackScreen, HistoryScreen, ModalScreen)) and action in (
             "enqueue",
             "like",
-            "add_to_playlist",
             "previous_page",
             "next_page",
         ):
+            return False
+        if action == "add_to_playlist" and isinstance(self.screen, (HistoryScreen, ModalScreen)):
             return False
         return True
 
@@ -675,17 +870,19 @@ class MusicApp(App):
             previous = self.music
             self.music, candidate = candidate, None
             self.source_key = key
+            self.return_to_browse()
             self.reset_library()
             self.quality, self.repeat_mode, self.playback_volume = preferences
             if self.session_store is not None and self.ready:
                 await self.player.command("set_property", "volume", self.playback_volume)
             self.account_logged_in = logged_in
+            self.sync_playlist_actions()
             self.active_account_id = getattr(self.music, "account_id", "") if logged_in else ""
             self.query_one("#search", Input).value = ""
             field = self.query_one("#filter", Input)
             field.value = ""
             field.display = False
-            await self.query_one("#playlists", ListView).clear()
+            await self.draw_playlists()
             self.query_one("#songs", DataTable).clear()
             self.query_one("#view-title", Static).update("选择歌单，或搜索一首歌")
             self.query_one("#view-meta", Static).update("Enter 播放   [ / ] 翻页")
@@ -709,6 +906,9 @@ class MusicApp(App):
         """Open QR login after cancelling concurrent credential restoration."""
         if isinstance(self.screen, ModalScreen):
             return
+        if self.library_busy:
+            self.status("歌单操作尚未完成，请稍后登录")
+            return
         self.workers.cancel_group(self, "restore")
         self.save_state()
         self.push_screen(LoginScreen(self.music), self.logged_in)
@@ -731,6 +931,7 @@ class MusicApp(App):
                         "control",
                         "lyrics",
                         "library-action",
+                        "queue-view",
                     ):
                         pending.extend(self.workers.cancel_group(self, group))
                     await asyncio.gather(
@@ -738,9 +939,10 @@ class MusicApp(App):
                     )
                     if self.ready:
                         await self.player.command("stop")
+                    self.return_to_browse()
                     self.reset_library()
                     self.apply_preferences()
-                    await self.query_one("#playlists", ListView).clear()
+                    await self.draw_playlists()
                     self.query_one("#songs", DataTable).clear()
                     self.query_one("#search", Input).value = ""
                     field = self.query_one("#filter", Input)
@@ -751,6 +953,7 @@ class MusicApp(App):
                 finally:
                     self.switching = False
             self.account_logged_in = True
+            self.sync_playlist_actions()
             self.active_account_id = account_id
             self.update_heading()
             self.load_playlists()
@@ -767,16 +970,7 @@ class MusicApp(App):
         self.status("正在加载歌单…")
         try:
             self.playlists = await self.music.playlists()
-            view = self.query_one("#playlists", ListView)
-            await view.clear()
-            await view.extend(
-                ListItem(
-                    Label(p.title, markup=False),
-                    Label("", classes="playlist-count", markup=False),
-                )
-                for p in self.playlists
-            )
-            self.update_playlist_counts()
+            await self.draw_playlists()
             self.status(message or "歌单已更新 · Tab 切换区域 · Enter 打开歌单或播放歌曲")
             if self.source is None and self.playlists:
                 self.load_view(self.playlists[0])
@@ -790,9 +984,8 @@ class MusicApp(App):
         """Open the playlist selected in the library sidebar."""
         if self.switching:
             return
-        index = event.list_view.index
-        if index is not None and index < len(self.playlists):
-            self.load_view(self.playlists[index])
+        if isinstance(event.item, PlaylistItem) and event.item.parent is event.list_view:
+            self.load_view(event.item.playlist)
 
     @on(Input.Submitted, "#search")
     def search_submitted(self, event: Input.Submitted) -> None:
@@ -857,11 +1050,123 @@ class MusicApp(App):
     def update_playlist_counts(self) -> None:
         """Refresh sidebar counts from loaded metadata or playlist defaults."""
         view = self.query_one("#playlists", ListView)
-        for playlist, item in zip(self.playlists, view.children, strict=False):
+        for item in view.query(PlaylistItem):
+            playlist = item.playlist
             count = self.playlist_counts.get(playlist, playlist.song_count)
             item.query_one(".playlist-count", Label).update(
-                f"{count} 首" if count is not None else "打开查看歌曲数"
+                f"{count} 首" if count is not None else "歌曲数未知"
             )
+            item.query_one(".playlist-plays", Label).update(
+                play_count_text(playlist.play_count)
+                if playlist.play_count is not None
+                else "播放量未知"
+            )
+
+    async def draw_playlists(self) -> None:
+        """Sort the complete sidebar snapshot while retaining the selected playlist identity."""
+        async with self._playlist_render_lock:
+            view = self.query_one("#playlists", ListView)
+            selected = (
+                self.displayed_playlists[view.index].id
+                if view.index is not None and view.index < len(self.displayed_playlists)
+                else None
+            )
+            entries = list(self.playlists)
+            if self.playlist_sort in (1, 2):
+                direction = -1 if self.playlist_sort == 1 else 1
+                entries.sort(
+                    key=lambda playlist: (
+                        playlist.play_count is None,
+                        direction * (playlist.play_count or 0),
+                    )
+                )
+            elif self.playlist_sort == 3:
+                entries.sort(key=lambda playlist: playlist.title.casefold())
+            self.displayed_playlists = entries
+            await view.clear()
+            await view.extend(PlaylistItem(playlist) for playlist in entries)
+            view.index = next(
+                (index for index, playlist in enumerate(entries) if playlist.id == selected),
+                0 if entries else None,
+            )
+            self.query_one("#playlist-sort", Button).label = (
+                "排序：默认",
+                "播放量↓",
+                "播放量↑",
+                "名称↑",
+            )[self.playlist_sort]
+            self.update_playlist_counts()
+
+    @on(Button.Pressed, "#playlist-sort")
+    async def sort_playlists(self) -> None:
+        """Cycle whole-library ordering using reported counts, keeping unknown counts last."""
+        if self.switching:
+            return
+        self.playlist_sort = (self.playlist_sort + 1) % 4
+        await self.draw_playlists()
+
+    def sync_playlist_actions(self) -> None:
+        """Expose creation only for a logged-in account and a supported music source."""
+        button = self.query_one("#create-playlist", Button)
+        supported = getattr(self.music, "supports_playlist_creation", False)
+        button.disabled = not self.account_logged_in or not supported
+        button.tooltip = (
+            "Ctrl+N 新建歌单"
+            if supported and self.account_logged_in
+            else "请先登录" if supported else "当前接入不支持新建歌单"
+        )
+
+    @on(Button.Pressed, "#create-playlist")
+    def press_create_playlist(self) -> None:
+        """Open the name form from the sidebar's visible creation entry."""
+        self.action_create_playlist()
+
+    def action_create_playlist(self, track: Track | None = None) -> None:
+        """Ask for a playlist name, optionally retaining the song to add after creation."""
+        if self.switching or self.library_busy or isinstance(self.screen, ModalScreen):
+            return
+        if not self.account_logged_in:
+            self.status("请先按 L 登录，再新建歌单")
+            return
+        if not getattr(self.music, "supports_playlist_creation", False):
+            self.status("当前接入不支持新建歌单")
+            return
+        self.push_screen(
+            CreatePlaylistScreen(),
+            lambda title: self.create_playlist(title, track),
+        )
+
+    @work(group="library-action")
+    async def create_playlist(self, title: str | None, track: Track | None = None) -> None:
+        """Create a real platform playlist and report creation and optional addition separately."""
+        if title is None or self.library_busy or self.switching:
+            return
+        self.library_busy = True
+        self.status(f"正在新建歌单：{title}")
+        try:
+            playlist = await self.music.create_playlist(title)
+        except Exception as error:
+            self.status(f"新建歌单失败：{error_text(error)}")
+        else:
+            message = f"已新建歌单：{playlist.title}"
+            if track is not None:
+                try:
+                    await self.music.add_to_playlist(track, playlist)
+                except Exception as error:
+                    message += f"；歌曲未加入：{error_text(error)}"
+                else:
+                    message += f"，已加入：{track.title}"
+            self.playlist_cache.clear()
+            self.load_playlists(message=message)
+        finally:
+            self.library_busy = False
+
+    def choose_playlist_destination(self, track: Track, choice: Playlist | str | None) -> None:
+        """Keep the chosen song when selecting an existing or new destination."""
+        if choice == "create":
+            self.action_create_playlist(track)
+        elif isinstance(choice, Playlist):
+            self.add_selected_to_playlist(track, choice)
 
     @on(Input.Submitted, "#filter")
     def filter_submitted(self, event: Input.Submitted) -> None:
@@ -913,19 +1218,47 @@ class MusicApp(App):
             self.status("请先打开一个歌单，再按 F 搜索歌单内歌曲")
 
     def draw_tracks(self) -> None:
-        """Render song rows and page metadata while preserving the cursor row."""
+        """Sort the visible page while retaining source indexes and the selected song."""
         table = self.query_one("#songs", DataTable)
         row = table.cursor_row
+        selected_key = table.ordered_rows[row].key if 0 <= row < table.row_count else None
         table.clear()
-        for index, track in enumerate(self.tracks):
+        column, descending, label = self.SORT_ORDERS[self.sort_order]
+        entries = list(enumerate(self.tracks))
+        if column != "position":
+            attribute = {"title": "title", "artist": "artist", "duration": "seconds"}[column]
+            entries.sort(
+                key=lambda entry: (
+                    getattr(entry[1], attribute).casefold()
+                    if attribute != "seconds"
+                    else entry[1].seconds
+                ),
+                reverse=descending,
+            )
+        for key, title in (
+            ("position", "序"),
+            ("title", "歌曲"),
+            ("artist", "歌手"),
+            ("duration", "时长"),
+        ):
+            direction = "↓" if descending else "↑"
+            table.columns[key].label = Text(
+                title + (direction if key == column and column != "position" else "")
+            )
+        self.query_one("#sort-order", Button).label = f"O 本页：{label}"
+        for index, track in entries:
             table.add_row(
                 self.track_number(index, track),
                 Text(track.title),
-                Text(track.artist, style="#a1b2c8"),
-                Text(timestamp(track.seconds), style="#a1b2c8"),
+                Text(track.artist, style=self.get_css_variables()["text-muted"]),
+                Text(timestamp(track.seconds), style=self.get_css_variables()["text-muted"]),
                 key=str(index),
             )
+        if selected_key in table.rows:
+            row = table.get_row_index(selected_key)
         table.move_cursor(row=min(row, max(0, len(self.tracks) - 1)))
+        if self.source is None:
+            return
         if isinstance(self.source, PlaylistSearch):
             title = self.source.playlist.title
             count = f"共 {self.source.playlist_total} 首 / 匹配 {self.total} 首"
@@ -936,9 +1269,31 @@ class MusicApp(App):
             count = f"共 {self.total} 首"
         pages = max(1, (self.total + self.page_size - 1) // self.page_size)
         self.query_one("#view-title", Static).update(title)
-        self.query_one("#view-meta", Static).update(
-            f"{count}   第 {self.page} 页 / {pages} 页   本页 {len(self.tracks)} 首"
+        self.query_one("#view-meta", Static).update(f"{count}  第 {self.page} 页/{pages}")
+
+    @on(DataTable.HeaderSelected, "#songs")
+    def sort_header(self, event: DataTable.HeaderSelected) -> None:
+        """Toggle a clicked column's direction; clicking sequence restores source order."""
+        column = event.column_key.value
+        current_column, descending, _ = self.SORT_ORDERS[self.sort_order]
+        descending = not descending if column == current_column else False
+        self.sort_order = next(
+            index
+            for index, (key, reverse, _) in enumerate(self.SORT_ORDERS)
+            if key == column and (key == "position" or reverse == descending)
         )
+        self.draw_tracks()
+
+    @on(Button.Pressed, "#sort-order")
+    def cycle_sort(self) -> None:
+        """Cycle the visible page's sort order from the inline button."""
+        self.action_sort()
+
+    def action_sort(self) -> None:
+        """Cycle page sorting without changing the loaded source or playback queue."""
+        self.return_to_browse()
+        self.sort_order = (self.sort_order + 1) % len(self.SORT_ORDERS)
+        self.draw_tracks()
 
     @on(DataTable.RowSelected, "#songs")
     def select_track(self, event: DataTable.RowSelected) -> None:
@@ -957,8 +1312,9 @@ class MusicApp(App):
         self.manual_current = None
         self.queue_source, self.queue_page = self.source, self.page
         self.queue_has_more = self.has_more
-        self.reset_shuffle(event.cursor_row)
-        self.play_index(event.cursor_row)
+        index = int(event.row_key.value)
+        self.reset_shuffle(index)
+        self.play_index(index)
 
     @work(exclusive=True, group="play")
     async def play_index(self, index: int, *, resume: bool = False, shuffle: int = 0) -> None:
@@ -1044,9 +1400,7 @@ class MusicApp(App):
         resume: bool = False,
         origin: QueuedTrack | None = None,
     ) -> None:
-        """Load a queue song and retain its identity and progress for explicit recovery."""
-        if isinstance(self.screen, LyricsScreen):
-            self.pop_screen()
+        """Play the first authorized tier at or below the preference, retaining recovery state."""
         if not resume or origin is not None:
             self.playback_origin = (
                 origin
@@ -1064,18 +1418,32 @@ class MusicApp(App):
             self.playback_paused = False
             await self.player.command("stop")
         self.playback_track = track
-        self.status(f"正在获取：{track.title} · {quality.label}")
-        url = await self.music.stream_url(track, quality)
+        tiers = list(Quality)
+        for actual_quality in tiers[tiers.index(quality) :]:
+            self.status(f"正在获取：{track.title} · {actual_quality.label}")
+            try:
+                url = await self.music.stream_url(track, actual_quality)
+                break
+            except QualityUnavailableError:
+                continue
+        else:
+            raise QualityUnavailableError(
+                "此歌曲暂无可用完整音源，已尝试至标准音质，请检查音源和会员权限"
+            )
         await self.player.load(
             url,
             start=self.playback_position if resume else 0,
             paused=self.playback_paused if resume else False,
         )
         self.current = track
-        self.current_quality = quality
+        self.current_quality = actual_quality
         self.failed_request = None
         self.mark_playing_track()
-        self.status("Space 暂停 · N/P 切歌 · F7 播放页 · F8 最近播放 · F1 帮助")
+        self.status(
+            f"{quality.label} 不可用，已自动切换到 {actual_quality.label}"
+            if actual_quality != quality
+            else "Space 暂停 · N/P 切歌 · F7 播放页 · F8 最近播放 · F1 帮助"
+        )
         self.record_recent(track)
 
     @work(exclusive=True, group="play")
@@ -1167,12 +1535,12 @@ class MusicApp(App):
             bar = "━" * filled + "─" * (width - filled)
             title = f"{self.current.title} — {self.current.artist}  [{self.current_quality.label}]"
             detail = Text(f"{state}  {timestamp(elapsed)} ")
-            detail.append(bar[:filled], style="#65d9a4")
-            detail.append(bar[filled:], style="#52687e")
+            detail.append(bar[:filled], style=self.get_css_variables()["accent"])
+            detail.append(bar[filled:], style=self.get_css_variables()["text-muted"])
             detail.append(f" {timestamp(duration)}   音量 {volume}%")
         else:
             title = "正在加载…" if self.loading else "尚未播放"
-            detail = Text("选中歌曲后按 Enter 播放")
+            detail = Text("Enter 播放 · Space 暂停 · P/N 切歌")
         message = f"{title}\n{detail.plain}"
         if message != self.now_playing_text:
             self.now_playing_text = message
@@ -1185,7 +1553,12 @@ class MusicApp(App):
         number = (self.page - 1) * self.page_size + index + 1
         playing = self.current is not None and self.current.mid == track.mid
         return Text(
-            f"{'▸' if playing else ' '} {number}", style="#65d9a4" if playing else "#7e93aa"
+            f"{'▸' if playing else ' '} {number}",
+            style=(
+                self.get_css_variables()["accent"]
+                if playing
+                else self.get_css_variables()["text-muted"]
+            ),
         )
 
     def mark_playing_track(self) -> None:
@@ -1245,8 +1618,7 @@ class MusicApp(App):
             return self.current
         if isinstance(self.screen, PlaybackScreen) and self.playback_track is not None:
             return self.playback_track
-        row = self.query_one("#songs", DataTable).cursor_row
-        return self.tracks[row] if 0 <= row < len(self.tracks) else None
+        return self.selected_track()
 
     @work(exclusive=True, group="qualities")
     async def action_quality(self) -> None:
@@ -1276,7 +1648,9 @@ class MusicApp(App):
 
     def choose_quality(self, quality: Quality | None, track: Track) -> None:
         """Apply a quality selection and reload active playback at its current position."""
-        if quality is None or quality == self.quality:
+        if quality is None or (
+            quality == self.quality and (self.current is None or self.current_quality == quality)
+        ):
             return
         if self.quality_track() != track:
             self.status("歌曲已变化，请重新按 U 查询音质")
@@ -1316,8 +1690,12 @@ class MusicApp(App):
 
     def selected_track(self) -> Track | None:
         """Return the highlighted browsing song for queue and library actions."""
-        row = self.query_one("#songs", DataTable).cursor_row
-        return self.tracks[row] if 0 <= row < len(self.tracks) else None
+        table = self.query_one("#songs", DataTable)
+        row = table.cursor_row
+        if not 0 <= row < table.row_count:
+            return None
+        index = int(table.ordered_rows[row].key.value)
+        return self.tracks[index] if 0 <= index < len(self.tracks) else None
 
     def action_help(self) -> None:
         """Open keyboard help without interrupting playback or text entry."""
@@ -1334,11 +1712,14 @@ class MusicApp(App):
         self.status(f"已加入手动待播：{track.title} · F3 查看 · N 播放下一首")
         self.save_state()
 
+    def action_queue(self) -> None:
+        """Open the queue tab immediately while it prepares any random-source data."""
+        if not self.switching and not isinstance(self.screen, ModalScreen):
+            self.open_playback().show_tab("queue")
+
     @work(exclusive=True, group="queue-view")
-    async def action_queue(self) -> None:
-        """Show manual next tracks and the loaded remainder of the playback source."""
-        if isinstance(self.screen, ModalScreen):
-            return
+    async def prepare_queue(self) -> None:
+        """Prepare random successors without changing the user's page or keyboard focus."""
         if self.repeat_mode == RepeatMode.RANDOM and self.queue:
             try:
                 self.status("正在准备随机待播队列…")
@@ -1346,10 +1727,6 @@ class MusicApp(App):
                 self.fill_shuffle_remaining()
             except Exception as error:
                 self.status(error_text(error))
-                return
-            if isinstance(self.screen, ModalScreen):
-                return
-        self.push_screen(QueueScreen(self.get_queue_state, self.edit_pending_queue))
 
     def get_queue_state(self) -> QueueState:
         """Expose current manual entries and known source successors for live queue views."""
@@ -1468,33 +1845,72 @@ class MusicApp(App):
             pending_count=len(self.pending_tracks),
             next_track=next_track,
             next_hint=hint,
+            can_add_to_playlist=self.account_logged_in,
+            can_create_playlist=self.account_logged_in
+            and getattr(self.music, "supports_playlist_creation", False),
         )
 
-    def action_playback(self) -> None:
-        """Toggle the independent playback page while keeping the browser and queue intact."""
-        if isinstance(self.screen, PlaybackScreen):
+    @on(Tabs.TabActivated, "#navigation")
+    def navigate_tab(self, event: Tabs.TabActivated) -> None:
+        """Move between the visible application pages using the main navigation."""
+        event.stop()
+        if event.tabs.screen is self.screen and event.tab.id != "browse":
+            self.navigate(event.tab.id or "browse")
+
+    def navigate(self, page: str) -> None:
+        """Switch pages without accumulating navigation screens or replacing playback."""
+        if self.switching or isinstance(self.screen, ModalScreen):
+            return
+        if page == "browse":
+            self.return_to_browse()
+        elif page == "playback":
+            self.open_playback()
+        elif page == "history" and not isinstance(self.screen, HistoryScreen):
+            self.action_history()
+
+    def open_playback(self) -> PlaybackScreen:
+        """Reuse the player page or create it with the application's live dependencies."""
+        if isinstance(self.screen, HistoryScreen):
             self.pop_screen()
+        if isinstance(self.screen, PlaybackScreen):
+            return self.screen
+        page = PlaybackScreen(
+            self.get_playback_state,
+            self.handle_playback_action,
+            get_queue_state=self.get_queue_state,
+            edit_queue=self.edit_pending_queue,
+            load_lyrics=self.fetch_lyrics,
+        )
+        self.push_screen(page)
+        return page
+
+    def action_playback(self) -> None:
+        """Toggle the player page without changing the browser or playback queue."""
+        if isinstance(self.screen, PlaybackScreen):
+            self.return_to_browse()
         elif not isinstance(self.screen, ModalScreen):
-            self.push_screen(PlaybackScreen(self.get_playback_state, self.handle_playback_action))
+            self.open_playback()
 
     def return_to_browse(self) -> None:
-        """Leave the playback page before moving focus or loading a browsing origin."""
-        if isinstance(self.screen, PlaybackScreen):
+        """Restore the browser before search, filtering, or locating a playback source."""
+        while isinstance(self.screen, (PlaybackScreen, HistoryScreen)):
             self.pop_screen()
+        self.query_one("#navigation", Tabs).active = "browse"
+        self.query_one("#songs", DataTable).focus()
 
     def handle_playback_action(self, action: str) -> None:
         """Route page controls to the same application actions used by keyboard shortcuts."""
         if self.switching:
             return
-        if action == "browse":
-            self.return_to_browse()
+        if action in ("browse", "history"):
+            self.navigate(action)
             return
         actions = {
             "previous": self.action_previous,
             "pause": self.action_pause,
             "next": self.action_next,
             "quality": self.action_quality,
-            "queue": self.action_queue,
+            "queue": self.prepare_queue,
             "lyrics": self.action_lyrics,
             "retry": self.action_retry,
             "help": self.action_help,
@@ -1503,6 +1919,8 @@ class MusicApp(App):
             "search": self.action_search,
             "locate": self.action_locate,
             "filter": self.action_filter,
+            "add_to_playlist": self.action_add_to_playlist,
+            "create_playlist": self.action_create_playlist,
         }
         if callback := actions.get(action):
             callback()
@@ -1527,13 +1945,17 @@ class MusicApp(App):
 
     def action_history(self) -> None:
         """Open this account's recent songs and source shortcuts without changing playback."""
+        if isinstance(self.screen, HistoryScreen):
+            self.pop_screen()
+            return
         if isinstance(self.screen, ModalScreen):
             return
-        if self.session_store is None:
-            self.status("最近播放存储尚未启用")
-            return
         try:
-            records = self.session_store.history(self.source_key, self.active_account_id)
+            records = (
+                self.session_store.history(self.source_key, self.active_account_id)
+                if self.session_store is not None
+                else []
+            )
             entries = [
                 HistoryEntry(
                     decode_track(record["track"]),
@@ -1543,12 +1965,14 @@ class MusicApp(App):
                 )
                 for record in records
             ]
-            self.push_screen(HistoryScreen(entries), self.choose_recent)
+            self.push_screen(HistoryScreen(entries, self.navigate), self.choose_recent)
         except (OSError, ValueError, KeyError, TypeError) as error:
             self.status(f"无法读取最近播放：{error_text(error)}")
 
     def choose_recent(self, choice: tuple[str, dict] | None) -> None:
         """Play a recent song or open its saved origin while retaining current audio."""
+        navigation = self.screen.query_one("#navigation", Tabs)
+        navigation.active = "playback" if isinstance(self.screen, PlaybackScreen) else "browse"
         if choice is None:
             return
         action, record = choice
@@ -1606,7 +2030,8 @@ class MusicApp(App):
             if row is None:
                 self.status("已返回播放来源，当前歌曲已不在这一页")
             else:
-                self.query_one("#songs", DataTable).move_cursor(row=row)
+                table = self.query_one("#songs", DataTable)
+                table.move_cursor(row=table.get_row_index(str(row)))
         except Exception as error:
             self.status(error_text(error))
 
@@ -1622,35 +2047,18 @@ class MusicApp(App):
         else:
             self.load_playlists()
 
-    @work(exclusive=True, group="lyrics")
-    async def action_lyrics(self) -> None:
-        """Fetch lyrics for the active or highlighted song without blocking playback."""
+    def action_lyrics(self) -> None:
+        """Open the player's lyric tab and let it follow subsequent track changes."""
         if isinstance(self.screen, ModalScreen):
             return
-        track = self.quality_track()
-        if track is None:
-            self.status("请先播放或选中一首歌曲")
-            return
-        self.status(f"正在加载歌词：{track.title}")
+        self.open_playback().show_tab("lyrics")
+
+    async def fetch_lyrics(self, track: Track) -> Lyrics:
+        """Fetch lyrics through the active source and sanitize network errors for the page."""
         try:
-            lyrics = await self.music.lyrics(track)
-            if self.quality_track() != track or isinstance(self.screen, ModalScreen):
-                self.status("歌曲已变化，请重新按 F4 查看歌词")
-                return
-            self.push_screen(
-                LyricsScreen(
-                    track,
-                    lyrics,
-                    lambda: (
-                        float(self.player.properties.get("time-pos") or 0)
-                        if self.current == track
-                        else 0
-                    ),
-                )
-            )
-            self.status(f"{track.title} · F4/Esc 返回")
+            return await self.music.lyrics(track)
         except Exception as error:
-            self.status(error_text(error))
+            raise ValueError(error_text(error)) from error
 
     @work(group="library-action")
     async def action_like(self) -> None:
@@ -1678,7 +2086,11 @@ class MusicApp(App):
     @work(group="library-action")
     async def action_add_to_playlist(self) -> None:
         """Fetch writable playlists and ask for a destination for the selected song."""
-        track = self.selected_track()
+        track = (
+            self.quality_track()
+            if isinstance(self.screen, PlaybackScreen)
+            else self.selected_track()
+        )
         if track is None or self.library_busy or isinstance(self.screen, ModalScreen):
             return
         if not self.account_logged_in:
@@ -1690,8 +2102,11 @@ class MusicApp(App):
             playlists = await self.music.playlists()
             if not isinstance(self.screen, ModalScreen):
                 self.push_screen(
-                    PlaylistPickerScreen(playlists),
-                    lambda playlist: self.add_selected_to_playlist(track, playlist),
+                    PlaylistPickerScreen(
+                        playlists,
+                        allow_create=getattr(self.music, "supports_playlist_creation", False),
+                    ),
+                    lambda choice: self.choose_playlist_destination(track, choice),
                 )
         except Exception as error:
             self.status(error_text(error))
@@ -1775,6 +2190,7 @@ class MusicApp(App):
             self.workers.cancel_group(self, "queue-view")
             await self.player.command("stop")
             self.current = None
+            self.current_quality = None
             self.queue, self.queue_source = tracks, source
             self.queue_page, self.queue_has_more, self.index = page, snapshot["has_more"], index
             self.pending_tracks, self.manual_current = pending, manual
@@ -1795,9 +2211,14 @@ class MusicApp(App):
     def update_heading(self) -> None:
         """Show account status, preferred quality, and repeat mode in the heading."""
         label = "已登录" if self.account_logged_in else "未登录"
+        if self.appearance == "system":
+            appearance = "系统外观不可用" if self._system_theme_unavailable else "跟随系统"
+        else:
+            appearance = "日间" if self.appearance == DAY.name else "夜间"
         self.query_one("#heading", Static).update(
             f"Music TUI · {self.music.display_name}   {label}   "
-            f"{self.quality.label}   {self.repeat_mode.value}"
+            f"{self.quality.label}   {self.repeat_mode.value}   "
+            f"{appearance}"
         )
 
     def reset_shuffle(self, index: int) -> None:
@@ -1862,12 +2283,18 @@ class MusicApp(App):
 
     def action_repeat(self) -> None:
         """Cycle playback modes and reset shuffle state when entering random mode."""
+        self.workers.cancel_group(self, "queue-view")
         modes = list(RepeatMode)
         self.repeat_mode = modes[(modes.index(self.repeat_mode) + 1) % len(modes)]
         if self.repeat_mode == RepeatMode.RANDOM:
             self.reset_shuffle(self.index)
         self.update_heading()
         self.status(f"{self.repeat_mode.value} · 作用于正在播放的整个列表")
+        if (
+            isinstance(self.screen, PlaybackScreen)
+            and self.screen.query_one("#playback-tabs", TabbedContent).active == "queue"
+        ):
+            self.prepare_queue()
 
 
 async def run(

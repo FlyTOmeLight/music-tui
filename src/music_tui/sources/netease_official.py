@@ -7,7 +7,7 @@ from pathlib import Path
 
 import qrcode
 
-from ..models import LoginState, Lyrics, Playlist, Quality, SongPage, Track
+from ..models import LoginState, Lyrics, Playlist, Quality, QualityUnavailableError, SongPage, Track
 from .netease_openapi import OfficialAPIError, OfficialClient
 
 API = "/openapi/music/basic"
@@ -39,6 +39,7 @@ def _track(song: dict) -> Track:
         song["name"],
         " / ".join(artist["name"] for artist in artists if artist.get("name")),
         int(song.get("duration", 0)) // 1000,
+        cover_url=song.get("coverImgUrl") or "",
     )
 
 
@@ -46,6 +47,7 @@ class OfficialNetEaseMusic:
     """Expose library and playback operations through the official signed API."""
 
     display_name = "网易云音乐（官方）"
+    supports_playlist_creation = False
 
     def __init__(
         self,
@@ -132,6 +134,9 @@ class OfficialNetEaseMusic:
                             item["name"],
                             favorite=item.get("specialType") == 5,
                             song_count=item.get("trackCount"),
+                            editable=kind == "created",
+                            play_count=item.get("playCount"),
+                            cover_url=item.get("coverImgUrl") or "",
                         ),
                     )
                 offset += len(items)
@@ -193,15 +198,33 @@ class OfficialNetEaseMusic:
         raise ValueError("网易云官方模式暂不支持修改喜欢状态，请使用 Enhanced 模式")
 
     async def add_to_playlist(self, track: Track, playlist: Playlist) -> None:
-        """Report unavailable playlist writes without attempting another backend."""
-        raise ValueError("网易云官方模式暂不支持添加到歌单，请使用 Enhanced 模式")
+        """Append opaque song IDs to an owned playlist through the authorized official API."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        if not playlist.editable:
+            raise ValueError("此歌单不可编辑，请选择自己的歌单")
+        await self._request(
+            "playlist/song/batch/like",
+            {"playlistId": str(playlist.id), "songIdList": [track.mid]},
+        )
+
+    async def create_playlist(self, title: str) -> Playlist:
+        """Report unavailable playlist creation without switching API backends."""
+        raise ValueError("网易云官方模式暂不支持新建歌单，请使用 Enhanced 模式")
 
     async def stream_url(self, track: Track, quality: Quality) -> str:
         """Resolve only full-length audio at the selected, authorized quality."""
         level = LEVELS[quality]
-        data = await self._request(
-            "song/detail/get/v2", {"songId": track.mid, "withUrl": True, "level": level}
-        )
+        try:
+            data = await self._request(
+                "song/detail/get/v2", {"songId": track.mid, "withUrl": True, "level": level}
+            )
+        except OfficialAPIError as error:
+            if error.code not in {"10003", "10004"}:
+                raise
+            raise QualityUnavailableError(
+                f"此歌曲的{quality.label}不可用，请检查音源和会员权限"
+            ) from error
         if (
             data.get("visible") is False
             or not data.get("playFlag")
@@ -209,7 +232,7 @@ class OfficialNetEaseMusic:
             or data.get("freeTrail") is not None
             or data.get("level") != level
         ):
-            raise ValueError(f"此歌曲的{quality.label}不可用，请检查会员权限或按 U 更换音质")
+            raise QualityUnavailableError(f"此歌曲的{quality.label}不可用，请检查音源和会员权限")
         return data["playUrl"]
 
     async def close(self) -> None:

@@ -1,14 +1,15 @@
 """Verify the focused playback page against shared state using an offline app."""
 
+import asyncio
 from dataclasses import replace
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button, Input, ProgressBar, Static
+from textual.widgets import Button, DataTable, Input, ProgressBar, Static, TabbedContent
 
-from music_tui.models import Track
+from music_tui.models import LyricLine, Lyrics, Track
 from music_tui.playback_screen import PlaybackScreen, PlaybackState
-from music_tui.screens import HelpScreen
+from music_tui.screens import HelpScreen, LyricsPanel, QueueState
 
 FIRST = Track("a", "[red]第一首[/red]", "[bold]歌手[/bold]", 120)
 SECOND = Track("b", "第二首", "另一位歌手", 180)
@@ -31,6 +32,8 @@ class PlaybackHarness(App):
             source_label="[green]歌单[/green]",
             platform="QQ 音乐",
             next_track=SECOND,
+            can_add_to_playlist=True,
+            can_create_playlist=True,
         )
         self.requests = []
 
@@ -48,9 +51,78 @@ class PlaybackHarness(App):
 
     def open_playback(self):
         """Push a page which reads current state without capturing a stale snapshot."""
-        page = PlaybackScreen(lambda: self.state, self.dispatch)
+        page = PlaybackScreen(
+            lambda: self.state,
+            self.dispatch,
+            get_queue_state=lambda: QueueState(self.state.track, (), (), False, "来源"),
+            edit_queue=lambda operation, key: None,
+            load_lyrics=self.load_lyrics,
+        )
         self.push_screen(page)
         return page
+
+    async def load_lyrics(self, track):
+        """Return synchronized lyrics for the requested song without network access."""
+        return Lyrics((LyricLine(0, track.title), LyricLine(5, "第二行")))
+
+
+async def test_wide_playback_keeps_cover_details_and_controls_together():
+    """Use a centered readable composition with a larger cover on a spacious terminal."""
+    app = PlaybackHarness()
+    async with app.run_test(size=(120, 40)) as pilot:
+        page = app.open_playback()
+        await pilot.pause()
+        identity = page.query_one("#song-identity").region
+        cover = page.query_one("#playback-artwork").region
+        controls = page.query_one("#playback-controls").region
+        assert cover.width >= 32
+        assert cover.height >= 16
+        assert identity.width <= 90
+        assert abs(identity.center[0] - 60) <= 2
+        assert controls.width <= 90
+        assert abs(controls.center[0] - 60) <= 2
+        assert controls.height <= 4
+        assert page.query_one("#playback-title").region.x < cover.right + 6
+
+
+@pytest.mark.parametrize("size, rows", [((120, 40), 1), ((80, 24), 2), ((36, 16), 4)])
+async def test_compact_controls_adapt_groups_to_terminal_width(size, rows):
+    """Use single-row buttons, arranging transport and actions without stretching labels."""
+    app = PlaybackHarness()
+    async with app.run_test(size=size) as pilot:
+        page = app.open_playback()
+        await pilot.pause()
+        buttons = list(page.query(Button))
+        assert len({button.region.y for button in buttons}) == rows
+        for button in buttons:
+            assert button.region.height == 1
+            assert button.region.width <= 18
+            assert 0 <= button.region.x < button.region.right <= size[0]
+            button.focus()
+            await pilot.pause()
+            row = page._compositor.render_strips()[button.region.y].text
+            assert str(button.label) in row
+
+
+@pytest.mark.parametrize("size", [(48, 24), (80, 24)])
+async def test_long_song_details_remain_visible_or_scrollable(size):
+    """Allow long titles and artists to grow the scroll area instead of clipping notices."""
+    app = PlaybackHarness()
+    app.state = replace(
+        app.state,
+        track=Track("long", "很长的歌曲名称" * 8, "很长的歌手名称" * 6, 120),
+        status="播放失败，请按 F5 重试",
+    )
+    async with app.run_test(size=size) as pilot:
+        page = app.open_playback()
+        await pilot.pause()
+        body = page.query_one("#playback-body")
+        body.scroll_end(animate=False)
+        await pilot.pause()
+        message = page.query_one("#playback-message")
+        assert message.region.y >= body.region.y
+        assert message.region.bottom <= body.region.bottom
+        assert "播放失败" in page._compositor.render_strips()[message.region.y].text
 
 
 @pytest.mark.parametrize("size", [(80, 24), (48, 16)])
@@ -71,6 +143,25 @@ async def test_playback_controls_fit_compact_terminals(size):
             assert message.region.bottom <= page.query_one("#playback-body").region.bottom
         await pilot.press("tab", "enter")
         assert app.requests == ["next"]
+
+
+@pytest.mark.parametrize("size", [(120, 40), (80, 24), (48, 16)])
+async def test_secondary_button_labels_remain_visible_when_focused_or_clicked(size):
+    """Keep single-row action labels on the actual screen while navigating and clicking."""
+    app = PlaybackHarness()
+    async with app.run_test(size=size) as pilot:
+        page = app.open_playback()
+        await pilot.pause()
+        for name in ("quality", "add_to_playlist", "create_playlist", "retry"):
+            button = page.query_one(f"#playback-{name}", Button)
+            button.focus()
+            await pilot.pause()
+            row = page._compositor.render_strips()[button.region.y].text
+            assert str(button.label) in row
+            await pilot.click(button)
+            row = page._compositor.render_strips()[button.region.y].text
+            assert str(button.label) in row
+        assert app.requests == ["quality", "add_to_playlist", "create_playlist", "retry"]
 
 
 async def test_live_values_refresh_without_changing_page_or_focus():
@@ -103,9 +194,18 @@ async def test_live_values_refresh_without_changing_page_or_focus():
 
 
 async def test_all_buttons_delegate_to_the_shared_owner():
-    """Route keyboard-selected buttons through the same app actions as browsing."""
+    """Route transport through the owner and switch listening buttons in place."""
     app = PlaybackHarness()
-    names = ["previous", "pause", "next-button", "quality", "queue", "lyrics", "retry", "browse"]
+    names = [
+        "previous",
+        "pause",
+        "next-button",
+        "quality",
+        "add_to_playlist",
+        "create_playlist",
+        "retry",
+        "browse",
+    ]
     async with app.run_test(size=(80, 24)) as pilot:
         page = app.open_playback()
         await pilot.pause()
@@ -117,8 +217,8 @@ async def test_all_buttons_delegate_to_the_shared_owner():
             "pause",
             "next",
             "quality",
-            "queue",
-            "lyrics",
+            "add_to_playlist",
+            "create_playlist",
             "retry",
             "browse",
         ]
@@ -152,8 +252,6 @@ async def test_navigation_shortcuts_restore_browser_focus(key, action):
         ("n", "next"),
         ("u", "quality"),
         ("f2", "platform"),
-        ("f3", "queue"),
-        ("f4", "lyrics"),
         ("f5", "retry"),
         ("f6", "resume_session"),
     ],
@@ -164,7 +262,7 @@ async def test_playback_shortcuts_delegate_without_leaving_page(key, action):
     async with app.run_test(size=(80, 24)) as pilot:
         page = app.open_playback()
         await pilot.pause()
-        page.query_one("#playback-queue", Button).focus()
+        page.query_one("#playback-add_to_playlist", Button).focus()
         await pilot.press(key)
         assert app.requests == [action]
         assert app.screen is page
@@ -222,3 +320,103 @@ async def test_unknown_next_track_uses_owner_hint():
         page = app.open_playback()
         await pilot.pause()
         assert app.state.next_hint in str(page.query_one("#playback-next", Static).render())
+
+
+@pytest.mark.parametrize("key, tab", [("f3", "queue"), ("f4", "lyrics")])
+async def test_listening_tabs_keep_transport_and_screen(key, tab):
+    """Switch lyrics and queue in place and keep pause available on compact terminals."""
+    app = PlaybackHarness()
+    async with app.run_test(size=(48, 16)) as pilot:
+        page = app.open_playback()
+        await pilot.pause()
+        await pilot.press(key)
+        await pilot.pause()
+        assert app.screen is page
+        assert page.query_one(TabbedContent).active == tab
+        assert page.query_one("#playback-pause", Button).region.bottom <= 16
+        assert app.requests == (["queue"] if tab == "queue" else [])
+        if tab == "queue":
+            assert page.query_one("#queue-items", DataTable).region.height >= 3
+        if tab == "lyrics":
+            assert FIRST.title in str(page.query_one("#lyric-0", Static).render())
+
+
+async def test_visible_lyrics_follow_song_changes_and_retry_errors():
+    """Reload active lyrics after a song change and retry visible failures with F5."""
+    app = PlaybackHarness()
+    calls = []
+
+    async def load(track):
+        """Fail once for the new track before returning its real lyric content."""
+        calls.append(track)
+        if track == SECOND and calls.count(SECOND) == 1:
+            raise ValueError("暂时不可用")
+        return Lyrics((LyricLine(0, track.title),))
+
+    app.load_lyrics = load
+    async with app.run_test(size=(80, 24)) as pilot:
+        page = app.open_playback()
+        await pilot.pause()
+        await pilot.press("f4")
+        await pilot.pause()
+        app.state = replace(app.state, track=SECOND)
+        await pilot.pause(0.3)
+        assert any(
+            "歌词加载失败" in str(w.render()) for w in page.query(LyricsPanel).first().query(Static)
+        )
+        assert not page.query("#lyric-0")
+        await pilot.press("f5")
+        await pilot.pause()
+        assert SECOND.title in str(page.query_one("#lyric-0", Static).render())
+        assert app.requests == []
+
+
+async def test_slow_previous_song_lyrics_never_replace_the_new_song():
+    """Discard delayed lyric responses when the active track changes mid-request."""
+    app = PlaybackHarness()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def load(track):
+        """Model a cancelled external request that still produces its old response."""
+        if track == FIRST:
+            first_started.set()
+            try:
+                await release_first.wait()
+            except asyncio.CancelledError:
+                await release_first.wait()
+        return Lyrics((LyricLine(0, track.title),))
+
+    app.load_lyrics = load
+    async with app.run_test(size=(80, 24)) as pilot:
+        page = app.open_playback()
+        await pilot.pause()
+        await pilot.press("f4")
+        await asyncio.wait_for(first_started.wait(), 1)
+        app.state = replace(app.state, track=SECOND)
+        page.refresh_playback()
+        await pilot.pause()
+        assert SECOND.title in str(page.query_one("#lyric-0", Static).render())
+        release_first.set()
+        await pilot.pause()
+        assert SECOND.title in str(page.query_one("#lyric-0", Static).render())
+
+
+async def test_empty_lyrics_have_a_visible_instrumental_state():
+    """Keep a successful empty lyric result readable without opening another screen."""
+    app = PlaybackHarness()
+
+    async def load(track):
+        """Return the music source's successful no-lyrics response."""
+        return Lyrics()
+
+    app.load_lyrics = load
+    async with app.run_test(size=(48, 16)) as pilot:
+        page = app.open_playback()
+        await pilot.pause()
+        await pilot.press("f4")
+        await pilot.pause()
+        assert any(
+            "纯音乐" in str(w.render()) for w in page.query(LyricsPanel).first().query(Static)
+        )
+        assert app.screen is page

@@ -6,7 +6,7 @@ import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, urlopen
 
 from qqmusic_api import Client, Credential
@@ -15,7 +15,7 @@ from qqmusic_api.models.login import QRCodeLoginEvents, QRLoginType
 from qqmusic_api.modules.login_utils import QRCodeLoginSession
 from qqmusic_api.modules.song import BaseSongFileType, SongFileInfo, SongFileType
 
-from ..models import LoginState, Lyrics, Playlist, Quality, SongPage, Track
+from ..models import LoginState, Lyrics, Playlist, Quality, QualityUnavailableError, SongPage, Track
 from .lyrics import parse_lyrics
 
 
@@ -44,6 +44,7 @@ def track_from_song(song: Song) -> Track:
         song.file.media_mid,
         song.type,
         tuple(song.vs),
+        cover_url=song.cover_url(),
     )
 
 
@@ -79,12 +80,22 @@ class QQLoginSession:
 
 
 def url_reachable(url: str) -> bool:
-    """Reject playback paths that the audio server cannot serve."""
+    """Return False only for missing CDN files; preserve network and server failures."""
     try:
+        address = urlsplit(url)
+        if address.scheme not in ("http", "https") or not address.netloc:
+            raise ValueError("无效地址")
         with urlopen(Request(url, method="HEAD"), timeout=8) as response:
-            return 200 <= response.status < 300
-    except HTTPError:
-        return False
+            if not 200 <= response.status < 300:
+                raise RuntimeError(f"QQ 音乐音源服务器响应异常（HTTP {response.status}）")
+            return True
+    except HTTPError as error:
+        if error.code in (404, 410):
+            error.close()
+            return False
+        raise
+    except ValueError as error:
+        raise ValueError("QQ 音乐返回了无效音源地址") from error
 
 
 def save_credential(path: Path, credential: Credential) -> None:
@@ -103,6 +114,7 @@ class QQMusic:
     """QQ Music library and account implementation."""
 
     display_name = "QQ 音乐"
+    supports_playlist_creation = True
 
     def __init__(self, directory: Path):
         """Create a QQ client with account files in the supplied directory."""
@@ -147,10 +159,29 @@ class QQMusic:
             raise ValueError("请先按 L 扫码登录")
         async with asyncio.timeout(30):
             created = await self.client.user.get_created_songlist(self.client.credential.musicid)
-            liked = next((p.songnum for p in created.playlists if p.dirid == 201), None)
-            result = [Playlist(0, "我喜欢", 201, True, liked, editable=True)]
+            liked = next((p for p in created.playlists if p.dirid == 201), None)
+            result = [
+                Playlist(
+                    0,
+                    "我喜欢",
+                    201,
+                    True,
+                    liked.songnum if liked else None,
+                    editable=True,
+                    play_count=liked.play_cnt if liked else None,
+                    cover_url=liked.picurl if liked else "",
+                )
+            ]
             result.extend(
-                Playlist(p.id, p.title, p.dirid, song_count=p.songnum, editable=True)
+                Playlist(
+                    p.id,
+                    p.title,
+                    p.dirid,
+                    song_count=p.songnum,
+                    editable=True,
+                    play_count=p.play_cnt,
+                    cover_url=p.picurl,
+                )
                 for p in created.playlists
                 if p.dirid != 201 and p.id
             )
@@ -159,7 +190,13 @@ class QQMusic:
                 favorites = await self.client.user.get_fav_songlist(euin, num=50).collect_items()
                 known = {p.id for p in result}
                 result.extend(
-                    Playlist(p.id, p.title, song_count=p.songnum)
+                    Playlist(
+                        p.id,
+                        p.title,
+                        song_count=p.songnum,
+                        play_count=p.listennum if "listennum" in p.model_fields_set else None,
+                        cover_url=p.picurl,
+                    )
                     for p in favorites
                     if p.id not in known
                 )
@@ -244,6 +281,19 @@ class QQMusic:
         if not success:
             raise ValueError("QQ 音乐未能添加歌曲，请重试")
 
+    async def create_playlist(self, title: str) -> Playlist:
+        """Create a QQ playlist and retain its actual name and editable directory ID."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        title = title.strip()
+        if not title:
+            raise ValueError("请输入歌单名称")
+        async with asyncio.timeout(25):
+            result = await self.client.songlist.create(title)
+        if result.retCode != 0 or not result.id or not result.dirid:
+            raise ValueError("QQ 音乐未能新建歌单，请重试")
+        return Playlist(result.id, result.name, result.dirid, song_count=0, editable=True)
+
     def _file_info(self, track: Track, quality: Quality) -> SongFileInfo | None:
         """Select the audio source for a quality, returning None if its variant is absent."""
         file_type, variant_index = QQ_QUALITIES[quality]
@@ -281,22 +331,27 @@ class QQMusic:
         return [quality for quality in Quality if QQ_QUALITIES[quality][0].s in prefixes]
 
     async def stream_url(self, track: Track, quality: Quality) -> str:
-        """Resolve the requested quality or raise a visible error without downgrading."""
+        """Resolve the exact authorized tier, distinguishing unavailable audio from API errors."""
         info = self._file_info(track, quality)
         if info is None:
-            raise ValueError(f"此歌曲暂无{quality.label}音源，请按 U 选择其他音质")
+            raise QualityUnavailableError(f"此歌曲暂无{quality.label}音源")
         async with asyncio.timeout(25):
             urls = await self.client.song.get_song_urls(
                 [info],
                 file_type=QQ_QUALITIES[quality][0],
             )
-            if not urls.data or not urls.data[0].purl:
+            if not urls.data or not urls.data[0].purl or urls.data[0].result != 0:
                 code = urls.data[0].result if urls.data else "空响应"
-                raise ValueError(f"此歌曲的{quality.label}不可用（{code}），请检查音源和会员权限")
+                raise QualityUnavailableError(
+                    f"此歌曲的{quality.label}不可用（{code}），请检查音源和会员权限"
+                )
             cdn = await self.client.song.get_cdn_dispatch()
             if not cdn.sip:
                 raise ValueError("QQ 音乐未返回播放服务器")
-            return urljoin(cdn.sip[0], urls.data[0].purl)
+            url = urljoin(cdn.sip[0], urls.data[0].purl)
+            if not await asyncio.to_thread(url_reachable, url):
+                raise QualityUnavailableError(f"此歌曲的{quality.label}音源文件不存在")
+            return url
 
     async def close(self) -> None:
         """Release the QQ API client connection resources."""

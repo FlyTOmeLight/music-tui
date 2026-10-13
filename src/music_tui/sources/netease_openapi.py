@@ -119,6 +119,11 @@ class OfficialClient:
         if subcode not in {"200", "0"}:
             raise OfficialAPIError(subcode if re.fullmatch(r"-?\d+", subcode) else "未知")
         data = result.get("data")
+        if endpoint == "/openapi/music/basic/playlist/song/batch/like":
+            # The write returns true, or [] when the song was already present.
+            if data is True or data == []:
+                return {}
+            raise ValueError("网易云官方 API 未能添加歌曲，请重试")
         if not isinstance(data, dict):
             raise ValueError("网易云官方 API 缺少有效数据")
         return data
