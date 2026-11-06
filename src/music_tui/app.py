@@ -105,7 +105,7 @@ def error_text(error: Exception) -> str:
 
 
 class LoginScreen(ModalScreen[bool]):
-    BINDINGS = [Binding("escape", "cancel", "返回"), Binding("r", "refresh", "刷新")]
+    BINDINGS = [Binding("escape", "cancel", "返回"), Binding("r,l,L", "refresh", "刷新")]
     DEFAULT_CSS = """
     LoginScreen { align: center middle; background: $background 95%; }
     #login-box { width: 58; max-width: 100%; height: auto; max-height: 100%; align: center middle; }
@@ -129,7 +129,7 @@ class LoginScreen(ModalScreen[bool]):
             with Center(id="qr-frame"):
                 yield Static("", id="qr")
             yield Static("正在获取二维码…", id="login-state", markup=False)
-            yield Static("R 刷新 · Esc 返回", id="login-keys")
+            yield Static("R/L 刷新 · Esc 返回", id="login-keys")
 
     def on_mount(self) -> None:
         """Start fetching a login QR code when the dialog opens."""
@@ -461,7 +461,7 @@ class MusicApp(App):
         Binding("p", "previous", "上一首", show=False),
         Binding("n", "next", "下一首", show=False),
         Binding("space", "pause", "暂停"),
-        Binding("l", "login", "登录", show=False),
+        Binding("l,L", "login", "登录", show=False),
         Binding("slash", "search", "搜索", show=False),
         Binding("left_square_bracket", "previous_page", "上一页", show=False),
         Binding("right_square_bracket", "next_page", "下一页", show=False),

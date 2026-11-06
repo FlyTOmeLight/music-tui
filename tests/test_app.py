@@ -152,7 +152,7 @@ async def test_escape_cancels_pending_login_and_returns_focus(display_name):
     library.display_name = display_name
     app = MusicApp(library, Audio())
     async with app.run_test(size=(80, 24)) as pilot:
-        await pilot.press("l")
+        await pilot.press("L")
         await pilot.pause()
         assert isinstance(app.screen, LoginScreen)
         await pilot.press("escape")
@@ -280,6 +280,9 @@ async def test_login_connection_error_shows_full_command_in_small_terminal(messa
         await pilot.press("r")
         await pilot.pause()
         assert music.attempts == 2
+        await pilot.press("L")
+        await pilot.pause()
+        assert music.attempts == 3
         await pilot.press("escape")
         assert not isinstance(app.screen, LoginScreen)
 
