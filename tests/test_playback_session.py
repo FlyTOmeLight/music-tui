@@ -5,7 +5,7 @@ from dataclasses import asdict, replace
 
 import pytest
 
-from music_tui.models import Playlist, Track
+from music_tui.models import Chart, Playlist, Track
 from music_tui.playback_session import (
     ChartSongs,
     DailyRecommendation,
@@ -16,8 +16,6 @@ from music_tui.playback_session import (
     decode_track,
     encode_source,
 )
-
-from music_tui.models import Chart
 
 FIRST = Track("first", "第一首", "歌手", 120, variants=("original", "live"))
 SECOND = Track("second", "第二首", "歌手", 180)
