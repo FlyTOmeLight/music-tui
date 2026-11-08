@@ -128,6 +128,7 @@ class QQMusic:
 
     display_name = "QQ 音乐"
     supports_playlist_creation = True
+    supports_playlist_removal = True
 
     def __init__(self, directory: Path):
         """Create a QQ client with account files in the supplied directory."""
@@ -333,6 +334,20 @@ class QQMusic:
             )
         if not success:
             raise ValueError("QQ 音乐未能添加歌曲，请重试")
+
+    async def remove_from_playlist(self, track: Track, playlist: Playlist) -> None:
+        """Remove one song from a user-created QQ playlist using its directory ID."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        if not playlist.editable:
+            raise ValueError("此歌单不可编辑，请选择自己的歌单")
+        async with asyncio.timeout(25):
+            detail = await self.client.song.get_detail(track.mid)
+            success = await self.client.songlist.del_songs(
+                playlist.dirid, [(detail.track.id, detail.track.type)], tid=int(playlist.id)
+            )
+        if not success:
+            raise ValueError("QQ 音乐未能移除歌曲，请重试")
 
     async def create_playlist(self, title: str) -> Playlist:
         """Create a QQ playlist and retain its actual name and editable directory ID."""

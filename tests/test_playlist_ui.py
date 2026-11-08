@@ -3,20 +3,26 @@
 import asyncio
 
 import pytest
-from test_app import FIRST, SECOND
+from test_app import FIRST, SECOND, THIRD, CatalogLibrary
 from test_playback_features import FeatureAudio, FeatureLibrary
 from textual.widgets import Button, Input, ListView, Static
 
 from music_tui.app import LoginScreen, MusicApp
-from music_tui.models import Playlist
+from music_tui.models import Playlist, SongPage, Track
 from music_tui.playback_screen import PlaybackScreen
-from music_tui.screens import CreatePlaylistScreen, PlaylistPickerScreen
+from music_tui.playback_session import PlaylistSearch
+from music_tui.screens import (
+    CreatePlaylistScreen,
+    PlaylistPickerScreen,
+    RemoveFromPlaylistScreen,
+)
 
 
 class PlaylistLibrary(FeatureLibrary):
     """Model real playlist IDs and separately observable creation and song writes."""
 
     supports_playlist_creation = True
+    supports_playlist_removal = True
 
     def __init__(self):
         """Prepare known, zero, and unavailable play counts with writable destinations."""
@@ -28,7 +34,9 @@ class PlaylistLibrary(FeatureLibrary):
             Playlist(4, "常听歌单", editable=True, play_count=100),
         ]
         self.created = []
+        self.removed = []
         self.fail_create = False
+        self.fail_remove = False
 
     async def playlists(self):
         """Return the current library including newly created server-side IDs."""
@@ -42,6 +50,12 @@ class PlaylistLibrary(FeatureLibrary):
         self.created.append(playlist)
         self.entries.append(playlist)
         return playlist
+
+    async def remove_from_playlist(self, track, playlist):
+        """Record a successful removal or fail without changing account state."""
+        if self.fail_remove:
+            raise ValueError("账号权限不足")
+        self.removed.append((track, playlist))
 
 
 @pytest.mark.parametrize("size", [(80, 24), (48, 16)])
@@ -133,6 +147,126 @@ async def test_playback_add_button_uses_active_song_instead_of_hidden_selection(
         await pilot.pause()
         assert library.writes == [("add", FIRST, library.entries[0])]
         assert app.current == FIRST and app.player.loaded == ["a"]
+
+
+@pytest.mark.parametrize("confirm", [True, False])
+async def test_delete_removes_selected_song_only_after_confirmation(confirm):
+    """Confirm or cancel removal without starting playback or changing the other songs."""
+    library = PlaylistLibrary()
+    app = MusicApp(library, FeatureAudio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view(library.editable).wait()
+        assert app.tracks == [THIRD]
+        await pilot.press("delete")
+        await pilot.pause()
+        assert isinstance(app.screen, RemoveFromPlaylistScreen)
+        assert THIRD.title in str(app.screen.query_one(".remove-text", Static).render())
+        if confirm:
+            await pilot.press("y")
+        else:
+            await pilot.press("escape")
+        await app.workers.wait_for_complete()
+        assert library.removed == ([(THIRD, library.editable)] if confirm else [])
+        assert app.tracks == ([] if confirm else [THIRD])
+        assert app.playlist_counts[library.editable] == (0 if confirm else 1)
+        if confirm:
+            assert "已从" in app.last_status_message
+        assert not app.player.loaded
+
+
+async def test_delete_failure_keeps_song_and_reports_server_error():
+    """Do not remove the local row when the platform rejects the write."""
+    library = PlaylistLibrary()
+    library.fail_remove = True
+    app = MusicApp(library, FeatureAudio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view(library.editable).wait()
+        await pilot.press("delete", "y")
+        await app.workers.wait_for_complete()
+        assert app.tracks == [THIRD]
+        assert app.playlist_counts[library.editable] == 1
+        assert "账号权限不足" in app.last_status_message
+
+
+async def test_delete_on_readonly_playlist_does_not_open_confirmation():
+    """Reject removal from a followed playlist before any local state changes."""
+    library = PlaylistLibrary()
+    app = MusicApp(library, FeatureAudio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view(Playlist(2, "收藏歌单")).wait()
+        await pilot.press("delete")
+        await pilot.pause()
+        assert not isinstance(app.screen, RemoveFromPlaylistScreen)
+        assert "不可编辑" in app.last_status_message
+        assert app.tracks == [THIRD]
+
+
+async def test_delete_from_filtered_playlist_updates_match_and_total_counts():
+    """Keep a filtered source's matched rows and original playlist count consistent."""
+    library = PlaylistLibrary()
+    app = MusicApp(library, FeatureAudio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view(library.editable).wait()
+        await app.filter_playlist(library.editable, "下一").wait()
+        assert isinstance(app.source, PlaylistSearch)
+        await pilot.press("delete", "y")
+        await app.workers.wait_for_complete()
+        assert app.source == PlaylistSearch(library.editable, "下一", (), 0)
+        assert app.tracks == [] and app.total == 0
+
+
+async def test_delete_last_filtered_page_returns_to_previous_filtered_page():
+    """Keep the playlist filter active when removing the only song on its last page."""
+
+    class PagedPlaylistLibrary(CatalogLibrary):
+        """Serve 101 matching songs across two pages for one editable playlist."""
+
+        account_id = "account-1"
+        supports_playlist_removal = True
+
+        def __init__(self):
+            """Replace the inherited catalog with one full page plus one matching song."""
+            super().__init__()
+            self.playlist = Playlist(1, "分页歌单", editable=True, song_count=101)
+            self.catalog = [Track(str(index), f"歌 {index}", "歌手", 180) for index in range(101)]
+            self.removed = []
+
+        async def restore(self):
+            """Restore an account without requiring QR login in the UI test."""
+            return True
+
+        async def playlists(self):
+            """Return the single editable playlist used by this test."""
+            return [self.playlist]
+
+        async def songs(self, playlist, page):
+            """Return the requested 100-song page of the matching catalog."""
+            start = (page - 1) * 100
+            return SongPage(
+                self.catalog[start : start + 100],
+                start + 100 < len(self.catalog),
+                len(self.catalog),
+            )
+
+        async def remove_from_playlist(self, track, playlist):
+            """Record the accepted removal request."""
+            self.removed.append((track, playlist))
+
+    library = PagedPlaylistLibrary()
+    app = MusicApp(library, FeatureAudio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view(library.playlist).wait()
+        await app.filter_playlist(library.playlist, "歌").wait()
+        await pilot.press("]")
+        await pilot.pause()
+        assert app.page == 2 and app.tracks == [library.catalog[-1]]
+        await pilot.press("delete", "y")
+        await app.workers.wait_for_complete()
+        assert app.source == PlaylistSearch(
+            library.playlist, "歌", tuple(library.catalog[:100]), 100
+        )
+        assert app.page == 1 and app.total == 100 and len(app.tracks) == 100
+        assert library.removed == [(library.catalog[-1], library.playlist)]
 
 
 async def test_playlist_sorting_uses_complete_reported_counts_and_preserves_selection():

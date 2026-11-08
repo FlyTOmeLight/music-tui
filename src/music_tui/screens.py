@@ -77,6 +77,7 @@ class HelpScreen(ModalScreen[None]):
                     "歌词与歌单\n"
                     "F4  打开播放页的歌词页签\n"
                     "S  喜欢／取消喜欢    W  加入歌单（播放页为当前歌曲）\n"
+                    "Delete  从当前可编辑歌单移出选中歌曲\n"
                     "I  歌手详情；合唱可选择歌手，名字也可点击\n"
                     "搜索结果 ♥/♡/?  显示喜欢状态，点击可切换\n"
                     "Ctrl+N  新建歌单    歌单侧栏可按累计播放量排序\n"
@@ -353,6 +354,62 @@ class PlaylistPickerScreen(ModalScreen[Playlist | str | None]):
     def create_destination(self) -> None:
         """Return an explicit creation choice instead of inventing a destination ID."""
         self.dismiss("create")
+
+
+class RemoveFromPlaylistScreen(ModalScreen[bool]):
+    """Confirm removing one selected song from an editable playlist."""
+
+    BINDINGS = [
+        Binding("escape,n", "cancel", "取消", priority=True),
+        Binding("y", "confirm", "移出", priority=True),
+    ]
+    DEFAULT_CSS = """
+    RemoveFromPlaylistScreen { align: center middle; background: $background 95%; }
+    RemoveFromPlaylistScreen #remove-box {
+        width: 56; max-width: 100%; height: auto;
+        background: $surface; border: round $border; padding: 0 2;
+    }
+    RemoveFromPlaylistScreen #remove-title { height: 1; color: $accent; text-style: bold; }
+    RemoveFromPlaylistScreen .remove-text { height: auto; color: $foreground; }
+    RemoveFromPlaylistScreen #remove-buttons { height: 3; }
+    RemoveFromPlaylistScreen #remove-buttons Button { width: 1fr; min-width: 0; }
+    RemoveFromPlaylistScreen #remove-keys { height: 1; color: $text-muted; }
+    """
+
+    def __init__(self, track: Track, playlist: Playlist):
+        """Keep the exact song and destination visible before the destructive write."""
+        super().__init__()
+        self.track = track
+        self.playlist = playlist
+
+    def compose(self) -> ComposeResult:
+        """Show the song, artist, playlist, and explicit confirm/cancel controls."""
+        with Vertical(id="remove-box"):
+            yield Static("移出歌单", id="remove-title")
+            yield Static(
+                f"《{self.track.title}》\n{self.track.artist}\n\n"
+                f"从「{self.playlist.title}」移出？",
+                markup=False,
+                classes="remove-text",
+            )
+            with Horizontal(id="remove-buttons"):
+                yield Button("取消", id="remove-cancel")
+                yield Button("移出", id="remove-confirm", variant="error")
+            yield Static("Y 移出 · N/Esc 取消", id="remove-keys")
+
+    def on_mount(self) -> None:
+        """Focus the safe choice so Enter does not remove the song by default."""
+        self.query_one("#remove-cancel", Button).focus()
+
+    @on(Button.Pressed, "#remove-confirm")
+    def action_confirm(self) -> None:
+        """Return confirmation only after the user explicitly chooses removal."""
+        self.dismiss(True)
+
+    @on(Button.Pressed, "#remove-cancel")
+    def action_cancel(self) -> None:
+        """Close the confirmation without changing the playlist."""
+        self.dismiss(False)
 
 
 class CreatePlaylistScreen(ModalScreen[str | None]):

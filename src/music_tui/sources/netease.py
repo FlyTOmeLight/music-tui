@@ -54,6 +54,7 @@ class NetEaseMusic:
 
     display_name = "网易云音乐（Enhanced）"
     supports_playlist_creation = True
+    supports_playlist_removal = True
 
     def __init__(self, directory: Path, api_url: str = "http://127.0.0.1:3000"):
         """Use a service with ENABLE_GENERAL_UNBLOCK explicitly disabled."""
@@ -271,6 +272,15 @@ class NetEaseMusic:
         if not playlist.editable:
             raise ValueError("此歌单不可编辑，请选择自己的歌单")
         await self._request("/playlist/tracks", op="add", pid=playlist.id, tracks=track.mid)
+        self._playlist_ids.pop(playlist.id, None)
+
+    async def remove_from_playlist(self, track: Track, playlist: Playlist) -> None:
+        """Remove one song from an owned playlist and invalidate its cached ordering."""
+        if not self.logged_in:
+            raise ValueError("请先按 L 扫码登录")
+        if not playlist.editable:
+            raise ValueError("此歌单不可编辑，请选择自己的歌单")
+        await self._request("/playlist/tracks", op="del", pid=playlist.id, tracks=track.mid)
         self._playlist_ids.pop(playlist.id, None)
 
     async def create_playlist(self, title: str) -> Playlist:

@@ -30,6 +30,7 @@ def qq_music(monkeypatch, tmp_path):
             like_song=AsyncMock(return_value=True),
             unlike_song=AsyncMock(return_value=True),
             add_songs=AsyncMock(return_value=True),
+            del_songs=AsyncMock(return_value=True),
             create=AsyncMock(
                 return_value=SimpleNamespace(retCode=0, id=10, dirid=301, name="新歌单")
             ),
@@ -90,7 +91,16 @@ async def test_qq_append_uses_owned_directory_and_reports_write_failure(qq_music
         await qq_music.set_liked(TRACK, True)
 
 
-@pytest.mark.parametrize("operation", ["like", "append", "query", "create"])
+async def test_qq_remove_uses_owned_directory_and_reports_write_failure(qq_music):
+    """Remove with the numeric song identity and report a rejected delete."""
+    await qq_music.remove_from_playlist(TRACK, EDITABLE)
+    qq_music.client.songlist.del_songs.assert_awaited_once_with(301, [(123, 0)], tid=10)
+    qq_music.client.songlist.del_songs.return_value = False
+    with pytest.raises(ValueError, match="未能移除"):
+        await qq_music.remove_from_playlist(TRACK, EDITABLE)
+
+
+@pytest.mark.parametrize("operation", ["like", "append", "remove", "query", "create"])
 async def test_library_actions_require_login_without_issuing_requests(qq_music, operation):
     """Reject library actions before SDK requests when account credentials are absent."""
     qq_music.client.credential.musicid = 0
@@ -100,6 +110,8 @@ async def test_library_actions_require_login_without_issuing_requests(qq_music, 
             await qq_music.set_liked(TRACK, True)
         elif operation == "append":
             await qq_music.add_to_playlist(TRACK, EDITABLE)
+        elif operation == "remove":
+            await qq_music.remove_from_playlist(TRACK, EDITABLE)
         elif operation == "create":
             await qq_music.create_playlist("新歌单")
         else:
@@ -112,6 +124,8 @@ async def test_readonly_playlist_is_rejected_before_qq_requests(qq_music):
     """Do not attempt to edit a collected playlist whose owner is another user."""
     with pytest.raises(ValueError, match="不可编辑"):
         await qq_music.add_to_playlist(TRACK, Playlist(10, "收藏歌单"))
+    with pytest.raises(ValueError, match="不可编辑"):
+        await qq_music.remove_from_playlist(TRACK, Playlist(10, "收藏歌单"))
     qq_music.client.song.get_detail.assert_not_awaited()
 
 
@@ -140,10 +154,14 @@ async def test_enhanced_like_and_append_send_correct_post_bodies(enhanced_music,
         music._playlist_ids = {10: [456], 20: [789]}
         await music.add_to_playlist(TRACK, EDITABLE)
         assert music._playlist_ids == {20: [789]}
+        music._playlist_ids = {10: [456], 20: [789]}
+        await music.remove_from_playlist(TRACK, EDITABLE)
+        assert music._playlist_ids == {20: [789]}
         assert calls == [
             ("/likelist", {"uid": 42}),
             ("/like", {"id": "123", "like": "true" if liked else "false"}),
             ("/playlist/tracks", {"op": "add", "pid": 10, "tracks": "123"}),
+            ("/playlist/tracks", {"op": "del", "pid": 10, "tracks": "123"}),
         ]
     finally:
         await music.close()
@@ -233,7 +251,7 @@ async def test_enhanced_like_does_not_accept_playlist_specific_response_wrapper(
         await music.close()
 
 
-@pytest.mark.parametrize("operation", ["like", "append", "query", "readonly", "create"])
+@pytest.mark.parametrize("operation", ["like", "append", "remove", "query", "readonly", "create"])
 async def test_enhanced_library_guards_do_not_issue_requests(enhanced_music, operation):
     """Block logged-out writes and readonly playlists before any service request."""
 
@@ -246,6 +264,8 @@ async def test_enhanced_library_guards_do_not_issue_requests(enhanced_music, ope
         if operation == "readonly":
             with pytest.raises(ValueError, match="不可编辑"):
                 await music.add_to_playlist(TRACK, Playlist(10, "收藏歌单"))
+            with pytest.raises(ValueError, match="不可编辑"):
+                await music.remove_from_playlist(TRACK, Playlist(10, "收藏歌单"))
         else:
             music.user_id = None
             assert music.account_id == ""
@@ -254,6 +274,8 @@ async def test_enhanced_library_guards_do_not_issue_requests(enhanced_music, ope
                     await music.set_liked(TRACK, False)
                 elif operation == "append":
                     await music.add_to_playlist(TRACK, EDITABLE)
+                elif operation == "remove":
+                    await music.remove_from_playlist(TRACK, EDITABLE)
                 elif operation == "create":
                     await music.create_playlist("新歌单")
                 else:
@@ -280,6 +302,17 @@ async def test_official_unsupported_actions_are_explicit_and_never_fallback(
         arguments = ("新歌单",)
     with pytest.raises(ValueError, match="官方模式暂不支持"):
         await getattr(music, operation)(*arguments)
+    client.request.assert_not_awaited()
+
+
+async def test_official_remove_is_explicitly_unsupported(monkeypatch, tmp_path):
+    """Report unavailable removal without calling an unverified endpoint."""
+    client = SimpleNamespace(request=AsyncMock())
+    monkeypatch.setattr("music_tui.sources.netease_official.OfficialClient", lambda *args: client)
+    music = OfficialNetEaseMusic(tmp_path, "test", None)
+    music.user_id = "opaque-user"
+    with pytest.raises(ValueError, match="官方模式暂不支持移出歌单歌曲"):
+        await music.remove_from_playlist(TRACK, Playlist("opaque-playlist", "歌单", editable=True))
     client.request.assert_not_awaited()
 
 

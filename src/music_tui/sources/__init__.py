@@ -20,6 +20,7 @@ class MusicSource(Protocol):
 
     display_name: str
     supports_playlist_creation: bool
+    supports_playlist_removal: bool
 
     @property
     def account_id(self) -> str:
@@ -72,6 +73,10 @@ class MusicSource(Protocol):
 
     async def add_to_playlist(self, track: Track, playlist: Playlist) -> None:
         """Add one song to an editable playlist without replacing existing songs."""
+        ...
+
+    async def remove_from_playlist(self, track: Track, playlist: Playlist) -> None:
+        """Remove one song from an editable playlist without changing the others."""
         ...
 
     async def create_playlist(self, title: str) -> Playlist:

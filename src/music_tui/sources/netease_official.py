@@ -48,6 +48,7 @@ class OfficialNetEaseMusic:
 
     display_name = "网易云音乐（官方）"
     supports_playlist_creation = False
+    supports_playlist_removal = False
 
     def __init__(
         self,
@@ -207,6 +208,10 @@ class OfficialNetEaseMusic:
             "playlist/song/batch/like",
             {"playlistId": str(playlist.id), "songIdList": [track.mid]},
         )
+
+    async def remove_from_playlist(self, track: Track, playlist: Playlist) -> None:
+        """Report unavailable removal without switching to another API backend."""
+        raise ValueError("网易云官方模式暂不支持移出歌单歌曲，请使用 Enhanced 模式")
 
     async def create_playlist(self, title: str) -> Playlist:
         """Report unavailable playlist creation without switching API backends."""

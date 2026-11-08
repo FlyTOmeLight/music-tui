@@ -66,6 +66,7 @@ from .screens import (
     PlaylistPickerScreen,
     QueueItem,
     QueueState,
+    RemoveFromPlaylistScreen,
 )
 from .session import SessionStore
 from .sources import MusicSource
@@ -455,6 +456,7 @@ class MusicApp(App):
         Binding("a", "enqueue", "下一首播放", show=False),
         Binding("s", "like", "喜欢", show=False),
         Binding("w", "add_to_playlist", "加入歌单", show=False),
+        Binding("delete", "remove_from_playlist", "移出歌单", show=False),
         Binding("g", "locate", "定位当前", show=False),
         Binding("i", "artist", "歌手详情", show=False),
         Binding("ctrl+r", "refresh", "刷新", show=False),
@@ -997,7 +999,9 @@ class MusicApp(App):
         return await self.music.songs(source, page)
 
     @work(exclusive=True, group="view")
-    async def load_view(self, source: PlaybackSource, *, page: int = 1) -> None:
+    async def load_view(
+        self, source: PlaybackSource, *, page: int = 1, message: str | None = None
+    ) -> None:
         """Fetch a song page and report failures in the status line."""
         self.status("正在加载歌曲…")
         if not isinstance(source, ArtistSongs):
@@ -1011,6 +1015,8 @@ class MusicApp(App):
             self.display_page(source, page, result)
             if isinstance(source, ArtistSongs):
                 await self.load_artist_detail(source, generation)
+            if generation == self._view_generation and message is not None:
+                self.status(message)
         except Exception as error:
             if generation == self._view_generation:
                 if isinstance(source, ArtistSongs):
@@ -2259,6 +2265,95 @@ class MusicApp(App):
             self.status(error_text(error))
         finally:
             self.library_busy = False
+
+    def action_remove_from_playlist(self) -> None:
+        """Ask to remove the selected song from the current editable playlist."""
+        if self.switching or self.library_busy:
+            return
+        if isinstance(self.screen, (PlaybackScreen, HistoryScreen, ModalScreen)):
+            return
+        track = self.selected_track()
+        source = self.source
+        playlist = source.playlist if isinstance(source, PlaylistSearch) else source
+        if track is None or not isinstance(playlist, Playlist):
+            return
+        if not self.account_logged_in:
+            self.status("请先按 L 登录，再移出歌单歌曲")
+            return
+        if not playlist.editable:
+            self.status("此歌单不可编辑，不能移出歌曲")
+            return
+        if not getattr(self.music, "supports_playlist_removal", False):
+            self.status("当前接入不支持移出歌单歌曲")
+            return
+        self.push_screen(
+            RemoveFromPlaylistScreen(track, playlist),
+            lambda confirmed: self.remove_from_playlist(track, playlist) if confirmed else None,
+        )
+
+    @work(group="library-action")
+    async def remove_from_playlist(self, track: Track, playlist: Playlist) -> None:
+        """Remove one song after server success and update the current view without refetching."""
+        if self.library_busy or self.switching:
+            return
+        self.library_busy = True
+        self.status(f"正在移出歌单：{track.title}")
+        try:
+            await self.music.remove_from_playlist(track, playlist)
+        except Exception as error:
+            self.status(error_text(error))
+        else:
+            self.playlist_cache.clear()
+            message = f"已从 {playlist.title} 移出：{track.title}"
+            if self.remove_track_from_current_view(track, playlist):
+                self.status(message)
+                if not self.tracks and self.page > 1:
+                    self.load_view(self.source, page=self.page - 1, message=message)
+            else:
+                self.status(f"{message} · 当前列表已变化，按 Ctrl+R 刷新")
+        finally:
+            self.library_busy = False
+
+    def remove_track_from_current_view(self, track: Track, playlist: Playlist) -> bool:
+        """Remove one song from the displayed source and its filtered snapshot."""
+        source = self.source
+        replacement: PlaylistSearch | None = None
+        if isinstance(source, PlaylistSearch) and source.playlist == playlist:
+            remaining = list(source.tracks)
+            if not self.remove_track_once(remaining, track):
+                return False
+            replacement = PlaylistSearch(
+                source.playlist,
+                source.keyword,
+                tuple(remaining),
+                max(0, source.playlist_total - 1),
+            )
+        elif not (isinstance(source, Playlist) and source == playlist):
+            return False
+        if not self.remove_track_once(self.tracks, track):
+            return False
+        if replacement is not None:
+            self.source = replacement
+        self.total = max(0, self.total - 1)
+        self.has_more = self.page < max(1, (self.total + self.page_size - 1) // self.page_size)
+        count = self.playlist_counts.get(playlist)
+        if count is not None:
+            self.playlist_counts[playlist] = max(0, count - 1)
+        self.draw_tracks()
+        self.update_playlist_counts()
+        return True
+
+    @staticmethod
+    def remove_track_once(tracks: list[Track], track: Track) -> bool:
+        """Remove the selected occurrence by identity, falling back to equality."""
+        index = next((index for index, item in enumerate(tracks) if item is track), None)
+        if index is None:
+            try:
+                index = tracks.index(track)
+            except ValueError:
+                return False
+        del tracks[index]
+        return True
 
     @work(exclusive=True, group="play")
     async def action_resume_session(self) -> None:
