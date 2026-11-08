@@ -112,6 +112,14 @@ class SongPage:
     page_size: int = 100
 
 
+@dataclass(frozen=True)
+class Chart:
+    """A platform chart with a stable identity and display name."""
+
+    id: int | str
+    title: str
+
+
 class LoginState(Enum):
     """Platform-independent transitions from QR scanning to account confirmation."""
 

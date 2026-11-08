@@ -7,7 +7,16 @@ from pathlib import Path
 
 import qrcode
 
-from ..models import LoginState, Lyrics, Playlist, Quality, QualityUnavailableError, SongPage, Track
+from ..models import (
+    Chart,
+    LoginState,
+    Lyrics,
+    Playlist,
+    Quality,
+    QualityUnavailableError,
+    SongPage,
+    Track,
+)
 from .netease_openapi import OfficialAPIError, OfficialClient
 
 API = "/openapi/music/basic"
@@ -49,6 +58,8 @@ class OfficialNetEaseMusic:
     display_name = "网易云音乐（官方）"
     supports_playlist_creation = False
     supports_playlist_removal = False
+    supports_daily_recommendation = False
+    supports_charts = False
 
     def __init__(
         self,
@@ -189,6 +200,18 @@ class OfficialNetEaseMusic:
     async def lyrics(self, track: Track) -> Lyrics:
         """Report unavailable lyrics without switching away from the official API."""
         raise ValueError("网易云官方模式暂不支持歌词，请使用 Enhanced 模式")
+
+    async def daily_songs(self, page: int = 1) -> SongPage:
+        """Report unavailable daily recommendation in the official implementation."""
+        raise ValueError("网易云官方模式暂不支持每日推荐，请使用 Enhanced 模式")
+
+    async def charts(self) -> list[Chart]:
+        """Report unavailable charts in the official implementation."""
+        raise ValueError("网易云官方模式暂不支持排行榜，请使用 Enhanced 模式")
+
+    async def chart_songs(self, chart: Chart, page: int = 1) -> SongPage:
+        """Report unavailable chart songs in the official implementation."""
+        raise ValueError("网易云官方模式暂不支持排行榜，请使用 Enhanced 模式")
 
     async def is_liked(self, track: Track) -> bool:
         """Report unavailable like-state queries in the official implementation."""

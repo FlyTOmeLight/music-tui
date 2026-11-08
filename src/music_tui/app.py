@@ -50,6 +50,8 @@ from .playback_queue import PlaybackEvents, PlaybackQueue, QueueSelection
 from .playback_screen import PlaybackScreen, PlaybackState
 from .playback_session import (
     ArtistSongs,
+    ChartSongs,
+    DailyRecommendation,
     PlaybackSnapshot,
     PlaybackSource,
     PlaylistSearch,
@@ -62,6 +64,7 @@ from .playback_session import (
 from .player import Player
 from .screens import (
     CreatePlaylistScreen,
+    DiscoverScreen,
     HelpScreen,
     PlaylistPickerScreen,
     QueueItem,
@@ -459,6 +462,7 @@ class MusicApp(App):
         Binding("delete", "remove_from_playlist", "移出歌单", show=False),
         Binding("g", "locate", "定位当前", show=False),
         Binding("i", "artist", "歌手详情", show=False),
+        Binding("d", "discover", "发现", show=False),
         Binding("ctrl+r", "refresh", "刷新", show=False),
         Binding("p", "previous", "上一首", show=False),
         Binding("n", "next", "下一首", show=False),
@@ -985,6 +989,10 @@ class MusicApp(App):
 
     async def fetch(self, source: PlaybackSource, page: int) -> SongPage:
         """Fetch a page from global search, a playlist, or cached playlist matches."""
+        if isinstance(source, DailyRecommendation):
+            return await self.music.daily_songs(page)
+        if isinstance(source, ChartSongs):
+            return await self.music.chart_songs(source.chart, page)
         if isinstance(source, ArtistSongs):
             return await self.music.artist_songs(source.artist, source.order, page)
         if isinstance(source, PlaylistSearch):
@@ -1253,6 +1261,25 @@ class MusicApp(App):
         """Navigate after a contributor is selected without starting audio."""
         if artist is not None:
             self.action_open_artist(artist.id, artist.name)
+
+    @work(group="view", exclusive=True)
+    async def action_discover(self) -> None:
+        """Open the discovery dialog for daily recommendations and charts."""
+        if isinstance(self.screen, ModalScreen) or self.switching:
+            return
+        try:
+            charts = await self.music.charts() if self.music.supports_charts else []
+        except Exception:
+            charts = []
+        show_daily = self.music.supports_daily_recommendation
+        self.push_screen(
+            DiscoverScreen(show_daily=show_daily, charts=charts), self.choose_discovery
+        )
+
+    def choose_discovery(self, source: PlaybackSource | None) -> None:
+        """Load the selected discovery source."""
+        if source is not None:
+            self.load_view(source)
 
     def action_open_artist(self, identity: str, name: str) -> None:
         """Snapshot the browser before navigating from any clickable artist name."""
@@ -1898,6 +1925,10 @@ class MusicApp(App):
     @staticmethod
     def source_label(source: PlaybackSource) -> str:
         """Describe a browsing origin using platform-independent song-library names."""
+        if isinstance(source, DailyRecommendation):
+            return "每日推荐"
+        if isinstance(source, ChartSongs):
+            return f"排行榜：{source.chart.title}"
         if isinstance(source, ArtistSongs):
             return f"歌手：{source.artist.name} · {source.order.label}"
         if isinstance(source, PlaylistSearch):

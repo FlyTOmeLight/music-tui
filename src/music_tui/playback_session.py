@@ -6,7 +6,19 @@ import math
 from dataclasses import asdict, dataclass
 from enum import Enum
 
-from music_tui.models import Artist, ArtistOrder, Playlist, Track
+from music_tui.models import Artist, ArtistOrder, Chart, Playlist, Track
+
+
+@dataclass(frozen=True)
+class DailyRecommendation:
+    """A platform-curated daily song list without user-defined parameters."""
+
+
+@dataclass(frozen=True)
+class ChartSongs:
+    """A stable chart identity used by browsing and playback."""
+
+    chart: Chart
 
 
 @dataclass(frozen=True)
@@ -27,7 +39,9 @@ class ArtistSongs:
     order: ArtistOrder = ArtistOrder.HOT
 
 
-type PlaybackSource = str | Playlist | PlaylistSearch | ArtistSongs | None
+type PlaybackSource = (
+    str | Playlist | PlaylistSearch | ArtistSongs | DailyRecommendation | ChartSongs | None
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +64,10 @@ class RepeatMode(Enum):
 
 def encode_source(source: PlaybackSource) -> dict | str | None:
     """Serialize an origin without credentials or temporary audio URLs."""
+    if isinstance(source, DailyRecommendation):
+        return {"daily": True}
+    if isinstance(source, ChartSongs):
+        return {"chart": asdict(source.chart)}
     if isinstance(source, ArtistSongs):
         return {"artist": asdict(source.artist), "order": source.order.value}
     if isinstance(source, PlaylistSearch):
@@ -122,6 +140,11 @@ def decode_source(value: object) -> PlaybackSource:
     if value is None or isinstance(value, str):
         return value
     data = _mapping(value)
+    if data.get("daily"):
+        return DailyRecommendation()
+    if "chart" in data:
+        chart_data = _mapping(data["chart"])
+        return ChartSongs(Chart(**chart_data))
     if "artist" in data:
         return ArtistSongs(decode_artist(data["artist"]), ArtistOrder(data["order"]))
     if "playlist" in data:

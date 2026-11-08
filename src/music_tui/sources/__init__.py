@@ -6,6 +6,7 @@ from ..models import (
     Artist,
     ArtistDetail,
     ArtistOrder,
+    Chart,
     LoginSession,
     Lyrics,
     Playlist,
@@ -21,6 +22,8 @@ class MusicSource(Protocol):
     display_name: str
     supports_playlist_creation: bool
     supports_playlist_removal: bool
+    supports_daily_recommendation: bool
+    supports_charts: bool
 
     @property
     def account_id(self) -> str:
@@ -45,6 +48,18 @@ class MusicSource(Protocol):
 
     async def songs(self, playlist: Playlist, page: int = 1) -> SongPage:
         """Fetch a playlist page in its original order."""
+        ...
+
+    async def daily_songs(self, page: int = 1) -> SongPage:
+        """Fetch a page of the platform's daily recommendation."""
+        ...
+
+    async def charts(self) -> list[Chart]:
+        """Return the platform's available charts."""
+        ...
+
+    async def chart_songs(self, chart: Chart, page: int = 1) -> SongPage:
+        """Fetch a page of songs from the given chart."""
         ...
 
     async def lyrics(self, track: Track) -> Lyrics:

@@ -16,6 +16,7 @@ from ..models import (
     Artist,
     ArtistDetail,
     ArtistOrder,
+    Chart,
     LoginState,
     Lyrics,
     Playlist,
@@ -55,6 +56,8 @@ class NetEaseMusic:
     display_name = "网易云音乐（Enhanced）"
     supports_playlist_creation = True
     supports_playlist_removal = True
+    supports_daily_recommendation = True
+    supports_charts = True
 
     def __init__(self, directory: Path, api_url: str = "http://127.0.0.1:3000"):
         """Use a service with ENABLE_GENERAL_UNBLOCK explicitly disabled."""
@@ -246,6 +249,29 @@ class NetEaseMusic:
             (result.get("lrc") or {}).get("lyric", ""),
             (result.get("tlyric") or {}).get("lyric", ""),
         )
+
+    async def daily_songs(self, page: int = 1) -> SongPage:
+        """Fetch the account's daily recommended songs."""
+        if not self.logged_in:
+            raise ValueError("每日推荐需要先登录，请按 L 扫码")
+        result = await self._request("/recommend/songs")
+        data = result.get("data") or {}
+        songs = data.get("dailySongs") or []
+        return SongPage([_track(s) for s in songs], False, len(songs), len(songs) or 100)
+
+    async def charts(self) -> list[Chart]:
+        """Return the platform's available charts."""
+        result = await self._request("/toplist")
+        return [
+            Chart(int(item["id"]), item["name"])
+            for item in result.get("list", [])
+            if item.get("id") and item.get("name")
+        ]
+
+    async def chart_songs(self, chart: Chart, page: int = 1) -> SongPage:
+        """Fetch a page of songs from the given chart."""
+        playlist = Playlist(int(chart.id), chart.title)
+        return await self.songs(playlist, page)
 
     async def liked_ids(self) -> set[str]:
         """Read the verified account's complete liked IDs as opaque track strings."""

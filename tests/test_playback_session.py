@@ -7,6 +7,8 @@ import pytest
 
 from music_tui.models import Playlist, Track
 from music_tui.playback_session import (
+    ChartSongs,
+    DailyRecommendation,
     PlaybackSnapshot,
     PlaylistSearch,
     QueuedTrack,
@@ -14,6 +16,8 @@ from music_tui.playback_session import (
     decode_track,
     encode_source,
 )
+
+from music_tui.models import Chart
 
 FIRST = Track("first", "第一首", "歌手", 120, variants=("original", "live"))
 SECOND = Track("second", "第二首", "歌手", 180)
@@ -77,6 +81,17 @@ def test_track_defaults_allow_older_metadata():
         {"mid": "first", "title": "歌曲", "artist": "歌手", "seconds": 10}
     ) == Track("first", "歌曲", "歌手", 10)
     assert decode_source({"id": 5, "title": "歌单"}) == Playlist(5, "歌单")
+
+
+def test_discovery_sources_round_trip():
+    """Daily recommendation and chart origins survive encode/decode."""
+    daily = DailyRecommendation()
+    assert decode_source(encode_source(daily)) == daily
+    assert encode_source(daily) == {"daily": True}
+
+    chart = ChartSongs(Chart(62, "飙升榜"))
+    assert decode_source(encode_source(chart)) == chart
+    assert encode_source(chart) == {"chart": {"id": 62, "title": "飙升榜"}}
 
 
 @pytest.mark.parametrize(

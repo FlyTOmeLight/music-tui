@@ -12,7 +12,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Label, ListItem, ListView, Static
 
-from .models import Lyrics, Playlist, Track
+from .models import Chart, Lyrics, Playlist, Track
 
 DIALOG_CSS = """
 .feature-dialog { align: center middle; background: $background 95%; }
@@ -83,6 +83,7 @@ class HelpScreen(ModalScreen[None]):
                     "Ctrl+N  新建歌单    歌单侧栏可按累计播放量排序\n"
                     "Ctrl+R  刷新当前列表    L  扫码登录\n"
                     "F2  切换音乐平台    F9  昼夜模式    Q  退出\n\n"
+                    "D  打开发现（每日推荐与排行榜）\n\n"
                     "搜索框中可正常输入字母和方括号；先按 Esc 返回列表，再使用快捷键。",
                     markup=False,
                 )
@@ -299,6 +300,65 @@ class LyricsPanel(Vertical):
             self.query_one("#lyrics-body", VerticalScroll).scroll_to_widget(
                 line, animate=False, center=True
             )
+
+
+class DiscoverScreen(ModalScreen):
+    """Choose a discovery source: daily recommendation or a chart."""
+
+    BINDINGS = [Binding("escape", "cancel", "返回", priority=True)]
+    SCOPED_CSS = False
+    DEFAULT_CSS = DIALOG_CSS
+
+    def __init__(self, *, show_daily: bool, charts: list[Chart]):
+        """Build the dialog with available discovery options."""
+        super().__init__()
+        self.show_daily = show_daily
+        self.charts = charts
+
+    def compose(self) -> ComposeResult:
+        """Show discovery options or a clear unsupported message."""
+        self.add_class("feature-dialog")
+        with Vertical(classes="dialog-box"):
+            yield Static("发现", classes="dialog-title")
+            if not self.show_daily and not self.charts:
+                yield Static(
+                    "当前平台不支持每日推荐和排行榜。",
+                    markup=False,
+                    classes="dialog-body",
+                )
+            else:
+                yield Static("选择浏览来源", classes="dialog-subtitle")
+                items = []
+                if self.show_daily:
+                    items.append(ListItem(Label("每日推荐", markup=False), id="discover-daily"))
+                for chart in self.charts:
+                    items.append(ListItem(Label(chart.title, markup=False), id=f"chart-{chart.id}"))
+                yield ListView(*items, id="discover-options", classes="dialog-body")
+            yield Static("↑/↓ 选择 · Enter 确认 · Esc 返回", classes="dialog-keys")
+
+    def on_mount(self) -> None:
+        """Focus the option list when choices are available."""
+        if self.show_daily or self.charts:
+            self.query_one("#discover-options", ListView).focus()
+
+    @on(ListView.Selected, "#discover-options")
+    def select_option(self, event: ListView.Selected) -> None:
+        """Return the selected discovery source."""
+        if event.item.id == "discover-daily":
+            from .playback_session import DailyRecommendation
+
+            self.dismiss(DailyRecommendation())
+        elif event.item.id and event.item.id.startswith("chart-"):
+            chart_id = event.item.id.removeprefix("chart-")
+            chart = next((c for c in self.charts if str(c.id) == chart_id), None)
+            if chart is not None:
+                from .playback_session import ChartSongs
+
+                self.dismiss(ChartSongs(chart))
+
+    def action_cancel(self) -> None:
+        """Close the dialog without changing the view."""
+        self.dismiss(None)
 
 
 class PlaylistPickerScreen(ModalScreen[Playlist | str | None]):

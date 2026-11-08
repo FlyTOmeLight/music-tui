@@ -20,6 +20,7 @@ from ..models import (
     Artist,
     ArtistDetail,
     ArtistOrder,
+    Chart,
     LoginState,
     Lyrics,
     Playlist,
@@ -129,6 +130,8 @@ class QQMusic:
     display_name = "QQ 音乐"
     supports_playlist_creation = True
     supports_playlist_removal = True
+    supports_daily_recommendation = True
+    supports_charts = True
 
     def __init__(self, directory: Path):
         """Create a QQ client with account files in the supplied directory."""
@@ -250,6 +253,37 @@ class QQMusic:
                 )
         return SongPage(
             [track_from_song(s) for s in result.songs], bool(result.hasmore), result.total
+        )
+
+    async def daily_songs(self, page: int = 1) -> SongPage:
+        """Fetch the platform's daily guess-recommendation."""
+        async with asyncio.timeout(25):
+            result = await self.client.recommend.get_guess_recommend(
+                credential=self.client.credential
+            )
+        return SongPage(
+            [track_from_song(s) for s in result.songs],
+            False,
+            len(result.songs),
+            len(result.songs) or 100,
+        )
+
+    async def charts(self) -> list[Chart]:
+        """Return the platform's available charts."""
+        async with asyncio.timeout(25):
+            result = await self.client.top.get_category()
+        return [Chart(top.id, top.name) for group in result.group for top in group.toplist]
+
+    async def chart_songs(self, chart: Chart, page: int = 1) -> SongPage:
+        """Fetch a page of songs from the given chart."""
+        num = 100
+        async with asyncio.timeout(25):
+            result = await self.client.top.get_detail(int(chart.id), num=num, page=page)
+        return SongPage(
+            [track_from_song(s) for s in result.songs],
+            len(result.songs) == num,
+            len(result.songs),
+            num,
         )
 
     async def artist_detail(self, artist: Artist) -> ArtistDetail:
