@@ -180,6 +180,7 @@ music-tui --source netease --netease-backend official
 | `s` / `w` / `Ctrl+N` | 喜欢 / 加入歌单 / 新建歌单 |
 | `Delete` | 从当前可编辑歌单移出选中歌曲 |
 | `i` / `o` / `Ctrl+R` | 歌手详情 / 本页排序 / 刷新列表 |
+| `d` | 打开发现（每日推荐与排行榜） |
 | `Esc` | 返回歌曲区域或关闭当前页面 |
 | `q` / `Ctrl+C` | 退出并停止播放 |
 
