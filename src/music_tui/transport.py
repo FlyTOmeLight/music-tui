@@ -14,9 +14,9 @@ class BottomTransport(Horizontal):
     """Keep mouse and keyboard controls synchronized with the existing player owner."""
 
     DEFAULT_CSS = """
-    BottomTransport { width: 24; height: 1; background: $surface; }
+    BottomTransport { width: 32; height: 1; background: $surface; }
     BottomTransport Button {
-        width: 8; min-width: 0; height: 1; padding: 0; border: none;
+        width: 1fr; min-width: 0; height: 1; padding: 0; border: none;
         color: $foreground; background: $surface; text-style: none;
     }
     BottomTransport #bottom-pause { color: $accent; }
@@ -38,10 +38,11 @@ class BottomTransport(Horizontal):
         self.callback = action
 
     def compose(self) -> ComposeResult:
-        """Expose the three playback operations as focusable single-row buttons."""
+        """Expose playback navigation and mode cycling as compact buttons."""
         yield Button("上一首", id="bottom-previous", compact=True, disabled=True)
         yield Button("暂停", id="bottom-pause", compact=True, disabled=True)
         yield Button("下一首", id="bottom-next", compact=True, disabled=True)
+        yield Button("模式", id="bottom-repeat", compact=True, tooltip="点击切换播放模式")
 
     def on_mount(self) -> None:
         """Apply readiness before accepting the first input."""
@@ -53,6 +54,14 @@ class BottomTransport(Horizontal):
         pause = self.query_one("#bottom-pause", Button)
         pause.label = "继续" if state.paused else "暂停"
         pause.disabled = not state.active or state.loading
+        mode = self.query_one("#bottom-repeat", Button)
+        mode.label = {
+            "顺序播放": "顺序",
+            "列表循环": "循环",
+            "单曲循环": "单曲",
+            "随机播放": "随机",
+        }.get(state.repeat_mode, "模式")
+        mode.tooltip = f"当前：{state.repeat_mode or '顺序播放'}；点击切换"
         for name in ("previous", "next"):
             self.query_one(f"#bottom-{name}", Button).disabled = (
                 not state.ready or state.track is None or state.loading

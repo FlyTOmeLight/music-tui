@@ -533,6 +533,26 @@ async def test_loop_whole_list_when_started_on_later_page():
         assert app.current == THIRD
 
 
+async def test_mouse_mode_buttons_cycle_playback_mode_on_both_pages():
+    """Let the bottom transport and playback page use the same mode owner as R."""
+    app = MusicApp(Library(), Audio())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await app.load_view("test").wait()
+        await pilot.press("enter")
+        await pilot.pause()
+        bottom = app.query_one("#bottom-repeat", Button)
+        assert str(bottom.label) == "顺序"
+        await pilot.click(bottom)
+        assert app.repeat_mode == RepeatMode.LIST
+        assert "列表循环" in str(app.query_one("#heading", Static).render())
+        page = app.open_playback()
+        await pilot.pause()
+        page_mode = page.query_one("#playback-repeat", Button)
+        await pilot.click(page_mode)
+        assert app.repeat_mode == RepeatMode.SINGLE
+        assert str(page_mode.label) == "单曲"
+
+
 async def test_single_loop_replays_on_end_but_manual_next_changes_song():
     """Verify single repeat handles EOF while manual navigation still changes tracks."""
     app = MusicApp(Library(), Audio())

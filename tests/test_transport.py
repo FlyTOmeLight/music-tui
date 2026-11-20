@@ -27,20 +27,20 @@ class TransportHarness(App):
 
 @pytest.mark.parametrize("method", ["mouse", "keyboard"])
 async def test_mouse_and_keyboard_request_the_same_playback_operations(method):
-    """All three controls dispatch once by click or by focused Enter."""
+    """All transport controls dispatch once by click or by focused Enter."""
     app = TransportHarness(
         PlaybackState(track=Track("1", "歌曲", "歌手", 120), ready=True, active=True)
     )
     async with app.run_test(size=(80, 24)) as pilot:
         transport = app.query_one(BottomTransport)
-        for name in ("previous", "pause", "next"):
+        for name in ("previous", "pause", "next", "repeat"):
             button = transport.query_one(f"#bottom-{name}", Button)
             if method == "mouse":
                 await pilot.click(button)
             else:
                 button.focus()
                 await pilot.press("enter")
-        assert app.commands == ["previous", "pause", "next"]
+        assert app.commands == ["previous", "pause", "next", "repeat"]
 
 
 @pytest.mark.parametrize(
@@ -69,6 +69,17 @@ async def test_readiness_and_loading_gate_input(state, allowed):
         assert app.commands == allowed
 
 
+async def test_mode_button_is_available_before_playback_and_shows_current_mode():
+    """Playback mode can be prepared by mouse before a track is active."""
+    app = TransportHarness(PlaybackState(repeat_mode="列表循环"))
+    async with app.run_test(size=(80, 24)) as pilot:
+        mode = app.query_one("#bottom-repeat", Button)
+        assert str(mode.label) == "循环"
+        assert not mode.disabled
+        await pilot.click(mode)
+        assert app.commands == ["repeat"]
+
+
 async def test_pause_and_disconnect_refresh_preserve_controls_and_focus():
     """A paused song offers continue while a disconnect disables transport input."""
     app = TransportHarness(
@@ -88,7 +99,9 @@ async def test_pause_and_disconnect_refresh_preserve_controls_and_focus():
         app.state = replace(app.state, ready=False, active=False)
         transport.refresh_state()
         await pilot.pause()
-        assert all(button.disabled for button in transport.query(Button))
+        assert all(
+            button.disabled for button in transport.query(Button) if button.id != "bottom-repeat"
+        )
         await pilot.click("#bottom-next")
         assert app.commands == ["pause"]
 

@@ -2065,6 +2065,7 @@ class MusicApp(App):
             "help": self.action_help,
             "platform": self.action_platform,
             "resume_session": self.action_resume_session,
+            "repeat": self.action_repeat,
             "search": self.action_search,
             "locate": self.action_locate,
             "filter": self.action_filter,
@@ -2438,12 +2439,12 @@ class MusicApp(App):
         if self.repeat_mode == RepeatMode.RANDOM:
             self.playback_queue.change_mode(self.repeat_mode)
         self.update_heading()
+        self.query_one(BottomTransport).refresh_state()
         self.status(f"{self.repeat_mode.value} · 作用于正在播放的整个列表")
-        if (
-            isinstance(self.screen, PlaybackScreen)
-            and self.screen.query_one("#playback-tabs", TabbedContent).active == "queue"
-        ):
-            self.prepare_queue()
+        if isinstance(self.screen, PlaybackScreen):
+            self.screen.refresh_playback()
+            if self.screen.query_one("#playback-tabs", TabbedContent).active == "queue":
+                self.prepare_queue()
 
 
 async def run(

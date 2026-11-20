@@ -85,7 +85,7 @@ async def test_wide_playback_keeps_cover_details_and_controls_together():
         assert page.query_one("#playback-title").region.x < cover.right + 6
 
 
-@pytest.mark.parametrize("size, rows", [((120, 40), 1), ((80, 24), 2), ((36, 16), 4)])
+@pytest.mark.parametrize("size, rows", [((120, 40), 2), ((80, 24), 3), ((36, 16), 5)])
 async def test_compact_controls_adapt_groups_to_terminal_width(size, rows):
     """Use single-row buttons, arranging transport and actions without stretching labels."""
     app = PlaybackHarness()
@@ -200,6 +200,7 @@ async def test_all_buttons_delegate_to_the_shared_owner():
         "previous",
         "pause",
         "next-button",
+        "repeat",
         "quality",
         "add_to_playlist",
         "create_playlist",
@@ -216,6 +217,7 @@ async def test_all_buttons_delegate_to_the_shared_owner():
             "previous",
             "pause",
             "next",
+            "repeat",
             "quality",
             "add_to_playlist",
             "create_playlist",
@@ -223,6 +225,18 @@ async def test_all_buttons_delegate_to_the_shared_owner():
             "browse",
         ]
         assert app.screen is not page
+
+
+async def test_mode_button_shows_current_mode_and_delegates_clicks():
+    """Expose playback mode as a mouse target with the live mode as its label."""
+    app = PlaybackHarness()
+    async with app.run_test(size=(80, 24)) as pilot:
+        page = app.open_playback()
+        await pilot.pause()
+        mode = page.query_one("#playback-repeat", Button)
+        assert str(mode.label) == "循环"
+        await pilot.click(mode)
+        assert app.requests == ["repeat"]
 
 
 @pytest.mark.parametrize(

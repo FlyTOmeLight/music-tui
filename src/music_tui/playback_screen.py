@@ -139,7 +139,7 @@ class PlaybackScreen(Screen):
         grid-size: 2 2; grid-rows: 1 1; height: 2;
     }
     PlaybackScreen #playback-controls Button {
-        width: 1fr; min-width: 0; height: 1; color: $foreground;
+        width: 1fr; min-width: 0; height: 1; padding: 0; color: $foreground;
         background: $surface; text-style: none;
     }
     PlaybackScreen #playback-pause { color: $accent; text-style: bold; }
@@ -153,8 +153,18 @@ class PlaybackScreen(Screen):
     }
     PlaybackScreen.-compact #playback-heading { display: none; }
     PlaybackScreen.-compact #queue-current { display: none; }
+    PlaybackScreen #playback-footer { height: 1; align: center middle; }
+    PlaybackScreen #playback-repeat {
+        width: 8; min-width: 8; height: 1; padding: 0; border: none;
+        color: $text-muted; background: $background;
+    }
+    PlaybackScreen #playback-repeat:hover { background: $primary-muted; color: $accent; }
+    PlaybackScreen #playback-repeat:focus {
+        background: $primary-muted; color: $accent; text-style: bold;
+    }
     PlaybackScreen #playback-keys {
-        height: 1; color: $text-muted; text-align: center; text-overflow: ellipsis;
+        width: 1fr; height: 1; color: $text-muted; text-align: center;
+        text-overflow: ellipsis;
     }
     """
 
@@ -236,9 +246,18 @@ class PlaybackScreen(Screen):
                             compact=True,
                         )
                         yield Button("重试", id="playback-retry", classes="secondary", compact=True)
-        yield Static(
-            "F3队列  F4歌词  Esc返回  F9主题  Shift+F9系统", id="playback-keys", markup=False
-        )
+        with Horizontal(id="playback-footer"):
+            yield Button(
+                "顺序",
+                id="playback-repeat",
+                compact=True,
+                tooltip="点击切换播放模式",
+            )
+            yield Static(
+                "F3队列  F4歌词  Esc返回  F9主题  Shift+F9系统",
+                id="playback-keys",
+                markup=False,
+            )
 
     def on_mount(self) -> None:
         """Start polling and place keyboard focus on pause or return when idle."""
@@ -308,6 +327,14 @@ class PlaybackScreen(Screen):
             f"音量 {state.volume:g}% · {state.quality or '尚未选择音质'} · "
             f"{state.repeat_mode or '顺序播放'}",
         )
+        mode = self.query_one("#playback-repeat", Button)
+        mode.label = {
+            "顺序播放": "顺序",
+            "列表循环": "循环",
+            "单曲循环": "单曲",
+            "随机播放": "随机",
+        }.get(state.repeat_mode, "顺序")
+        mode.tooltip = f"当前：{mode.label}；点击切换"
         self.update_text("playback-source", f"来源：{state.source_label or '尚未选择播放列表'}")
         if state.next_track:
             following = f"下一首：{state.next_track.title} · {state.next_track.artist}"
